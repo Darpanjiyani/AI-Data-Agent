@@ -20,7 +20,7 @@ def pick_llm(level: str):
     if level.lower() == "low":
         llm = ChatAnthropic(model="claude-haiku-4-5-20251001", temperature = 0)
     elif level.lower() == "medium":
-        llm = ChatAnthropic(model="claude-sonnet-5", temperature = 0)
+        llm = ChatAnthropic(model="claude-sonnet-5")
     elif level.lower() == "high":
         llm = ChatAnthropic(model="claude-opus-5", temperature = 0)
     else:
@@ -28,5 +28,6 @@ def pick_llm(level: str):
     
     return llm
 
-llm_obj = pick_llm("low")
-print(llm_obj.invoke("What is the capital of France?"))
+if __name__ == "__main__":
+    llm_obj = pick_llm("low")
+    print(llm_obj.invoke("What is the capital of France?"))

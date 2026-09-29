@@ -63,6 +63,22 @@ class DatabaseUtil:
 
         return schema_info_context 
 
+    def execute_query(self, query: str):
+        connection = self.connection
+        cursor = connection.cursor()
+        try:
+            cursor.execute(query)
+            result = cursor.fetchall()  # Fetch the result of the query if needed
+            connection.commit()
+            return str(result)
+        except Exception as e:
+            print(f"Error executing query: {e}")
+            return f"Error executing query: {e}"
+        finally:
+            if cursor:
+                cursor.close()
+            if connection:
+                connection.close()
 
 obj = DatabaseUtil({
     "host": os.getenv("DB_HOST"),
