@@ -17,18 +17,15 @@ class DatabaseUtil:
 
 
     def schema_details(self, schema_name):
-        cursor = None
-        connection = self.connection
+         
+         schema_info_context = ""       
+    
+         connection = self.connection
+         cursor = connection.cursor()   #Cursor is the object that we get with the postgres connection and with the help of which we can run the queries.
+                                                #This is the same cursor that created while pushing the data to the database as well.
+         schema_info_context = f"Database Schema: {schema_name}\n" 
 
-        try:
-            schema_info_context = ""       
-
-            connection = self.connection
-            cursor = connection.cursor()   #Cursor is the object that we get with the postgres connection and with the help of which we can run the queries.
-                                            #This is the same cursor that created while pushing the data to the database as well.
-
-            schema_info_context = f"Database Schema: {schema_name}\n" 
-
+         try:
             cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = %s;", (schema_name,)) #
             tables_list = cursor.fetchall()  #this is covert our result in the form of list (fetchall)
 
@@ -52,16 +49,16 @@ class DatabaseUtil:
                 for row in sample_data:
                     schema_info_context = f"{schema_info_context} Row: {row}\n" 
 
-        except Exception as e:
+         except Exception as e:
             print(f"Error retrieving schema details: {e}")
             schema_info_context = f"Error retrieving schema details: {e}"
-        finally:
+         finally:
             if cursor:
                  cursor.close()
             if connection:
                 connection.close()
 
-        return schema_info_context 
+         return schema_info_context 
 
     def execute_query(self, query: str):
         connection = self.connection
