@@ -31,7 +31,7 @@ class DatabaseUtil:
 
             for table in tables_list:
                 table_name = table[0]
-                schema_info_context += f"{schema_info_context}\nTable: {table_name}\n"
+                schema_info_context += f"\nTable: {table_name}\n"
 
                 # Adding column details for each table & Data Types as well
                 cursor.execute("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = %s;", (table_name,))   #whenever you write cursor.execute, you just need to first of all write your query, wherever you have any variable simply write %s that's it.

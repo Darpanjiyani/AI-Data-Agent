@@ -9,6 +9,15 @@ from Models.schema import AgentSchema, JudgeSchema
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
 
+import re
+
+def clean_sql(text: str) -> str:
+    text = text.strip()
+    match = re.search(r"```(?:sql)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if match:
+        text = match.group(1)
+    return text.strip()
+
 # ---------------------------- AI Agent Code -----------------------------------------------
 
 def curate_ques(state: AgentSchema) -> AgentSchema:
@@ -32,7 +41,7 @@ def prompt_query_context(state: AgentSchema) -> AgentSchema:
     conn_details = {
         "host": os.getenv("DB_HOST"),
         "port": int(os.getenv("DB_PORT")),
-        "database": os.getenv("DB_NAME"),
+        "dbname": os.getenv("DB_NAME"),
         "user": os.getenv("DB_USER"),
         "password": os.getenv("DB_PASSWORD")
     }
@@ -60,13 +69,7 @@ def prompt_query_context(state: AgentSchema) -> AgentSchema:
 
     """
 
-
     state.prompt_query_context = prompt
-
-    llm = pick_llm("Medium")  # Pick the appropriate LLM based on the specified level
-    generated_sql_query = llm.invoke(prompt)
-
-    state.generated_sql_query = generated_sql_query
 
     return state
 
@@ -75,10 +78,10 @@ def generate_sql(state: AgentSchema) -> AgentSchema:
 
     prompt = state.prompt_query_context
 
-    llm = pick_llm("Medium")  # Pick the appropriate LLM based on the specified level
+    llm = pick_llm("medium")  # Pick the appropriate LLM based on the specified level
     generated_sql_query = llm.invoke(prompt).content
 
-    state.generated_sql_query = generated_sql_query
+    state.generated_sql_query = clean_sql(generated_sql_query)
 
     return state
 
@@ -99,9 +102,12 @@ def is_safe_sql(state: AgentSchema) -> AgentSchema:
     Here's the sql query to evaluate:
     {sql_query} """
 
-    response = llm_judge.invoke(prompt)
-    state.is_safe_sql = response['answer'] # Store the judge's response in the state
+    response = llm_judge.invoke(prompt).model_dump()
+    state.is_safe = response['answer'] # Store the judge's response in the state
+    state.comments = response['comments']
+    
     return state
+
 
 #canceled SQL Query Node
 def canceled_sql(state: AgentSchema) -> AgentSchema:
@@ -121,7 +127,7 @@ def execute_sql(state: AgentSchema) -> AgentSchema:
     conn_details = {
         "host": os.getenv("DB_HOST"),
         "port": int(os.getenv("DB_PORT")),
-        "database": os.getenv("DB_NAME"),
+        "dbname": os.getenv("DB_NAME"),
         "user": os.getenv("DB_USER"),
         "password": os.getenv("DB_PASSWORD")
     }
@@ -213,29 +219,29 @@ if __name__ == "__main__":
     with open("sql_analyst_graph.png", "wb") as f:
         f.write(img.data)
 
-    # input_schema = {
-    #     "messages": [],
-    #     "user_question": "What are the different types of Payment Methods we have in our database",
-    #     "curated_ques": "",
-    #     "prompt_query_context": "",
-    #     "generated_sql_query": "",
-    #     "is_safe": "No",
-    #     "comments": "",
-    #     "sql_query_execution_result": "",
-    #     "final_answer": ""
-    # }
+    input_schema = {
+        "messages": [],
+        "user_question": "What are the different types of Payment Methods we have in our database",
+        "curated_ques": "",
+        "prompt_query_context": "",
+        "generated_sql_query": "",
+        "is_safe": "No",
+        "comments": "",
+        "sql_query_execution_result": "",
+        "final_answer": ""
+    }
 
-    # # Execute the Graph
-    # sql_analyst_response = sql_analyst.invoke(input_schema)
-    # print(sql_analyst_response['messages'])  # Print the final output of the graph execution
-    # print("********************************")
+    # Execute the Graph
+    sql_analyst_response = sql_analyst.invoke(input_schema)
+    print(sql_analyst_response['messages'])  # Print the final output of the graph execution
+    print("********************************")
 
-    # print(sql_analyst_response['generated_sql_query'])  # Print the generated SQL query
+    print(sql_analyst_response['generated_sql_query'])  # Print the generated SQL query
 
-    # print("********************************")
+    print("********************************")
 
-    # print(sql_analyst_response['sql_query_execution_result'])  # Print the result of executing the SQL query
+    print(sql_analyst_response['sql_query_execution_result'])  # Print the result of executing the SQL query
 
-    # print("********************************")
+    print("********************************")
 
-    # print(sql_analyst_response['prompt_query_context'])  # Print the prompt query context
+    print(sql_analyst_response['prompt_query_context'])  # Print the prompt query context
