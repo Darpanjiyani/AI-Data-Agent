@@ -78,6 +78,7 @@ class ETLTools:
         return top_3_rows
 
 
+
     def execute_code(self,code:str):
         """
         This tool executes the provided code and returns the output.
@@ -94,4 +95,7 @@ class ETLTools:
         except Exception as e:
             return f"Failed to execute code: {e}"
 
- 
+if __name__ == "__main__":
+    obj = ETLTools()
+    path = "C:\\Users\\darpa\\Downloads\\AI Data Agent\\data\\extract\\extracted_data.csv"
+    print(obj.transform_load_context(path))
