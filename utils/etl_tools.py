@@ -46,6 +46,9 @@ class ETLTools:
         except requests.exceptions.RequestException as e:
             return f"Failed to extract data: {e}"
 
+# if __name__ == "__main__":
+#     obj = ETLTools()
+#     print(obj.extract_load("https://pokeapi.co/api/v2/pokemon/", "data/extract", "c"))
 
     def transform_load_context(self, file_path:str):
         """
@@ -91,9 +94,4 @@ class ETLTools:
         except Exception as e:
             return f"Failed to execute code: {e}"
 
-
-if __name__ == "__main__":
-    obj = ETLTools()
-    path = "C:\\Data_Agent\\data\\extract\\extracted_data.csv"
-    print(obj.transform_load_context(path))
-          
+ 
