@@ -2,25 +2,6 @@
 
 A multi-agent system that intelligently processes data queries and automates data operations. Built with LangGraph, this project showcases how specialized agents collaborate to handle SQL database queries and ETL (Extract-Transform-Load) workflows through natural language commands.
 
-## YouTube Tutorial
-https://youtu.be/7yOmi4IX-Rs?si=_NGAHOomEPocRoqt
-
-## 📋 Table of Contents
-
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Features](#features)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Project Structure](#project-structure)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Agent Descriptions](#agent-descriptions)
-- [Data Models](#data-models)
-- [Examples](#examples)
-- [Contributing](#contributing)
-
----
 
 ## 🎯 Overview
 
@@ -151,9 +132,9 @@ password=your_password
 database=data_agent_db
 
 # Optional: Custom Model Selection
-LLM_MODEL_LOW=gpt-3.5-turbo
-LLM_MODEL_MEDIUM=gpt-4-turbo
-LLM_MODEL_HIGH=claude-3-opus
+LLM_MODEL_LOW=claude-haiku-4-5-20251001
+LLM_MODEL_MEDIUM=claude-sonnet-5
+LLM_MODEL_HIGH=claude-opus-5
 ```
 
 ---
@@ -352,16 +333,6 @@ Modify `utils/llm_pick.py` to change which models are used for different complex
 
 ---
 
-## 🤝 Contributing
-
-We welcome contributions! When adding features:
-- Follow the existing code style and naming conventions
-- Define state schemas in `Models/schema.py` for new agents
-- Consider security implications (especially for SQL and code execution)
-- Add documentation for new features
-
----
-
 ## 📚 Learning Resources
 
 To understand the technologies used:
@@ -369,13 +340,3 @@ To understand the technologies used:
 - [LangChain](https://python.langchain.com/) — LLM framework
 - [Claude API](https://docs.anthropic.com/) — Anthropic's models
 - [PostgreSQL](https://www.postgresql.org/docs/) — Database system
-
----
-
-## 📄 License
-
-This project is part of an AI engineering demonstration.
-
----
-
-**Version:** 0.1.0 | **Last Updated:** October 2026
