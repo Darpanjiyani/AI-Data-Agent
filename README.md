@@ -1,342 +1,372 @@
 # 🤖 AI Data Agent
 
-A multi-agent system that intelligently processes data queries and automates data operations. Built with LangGraph, this project showcases how specialized agents collaborate to handle SQL database queries and ETL (Extract-Transform-Load) workflows through natural language commands.
+Ask questions about your data in plain English, and let a team of AI agents answer them.
 
+AI Data Agent is a multi-agent system built with **LangGraph** and **Claude**. A router agent reads your request and sends it to one of two specialists:
 
-## 🎯 Overview
+- **SQL Analyst**: turns a question like *"Which payment methods do riders use most?"* into a PostgreSQL query, runs it, and explains the result in plain language.
+- **ETL Analyst**: extracts data from REST APIs and transforms CSV/JSON files using pandas, saving the output as CSV, JSON, or Parquet.
 
-The **AI Data Agent** understands natural language requests and intelligently routes them to the right processing engine. When you ask a question, the main router determines whether you need database access (SQL Analyst) or data transformation (ETL Analyst), then delegates the work accordingly.
+The project ships with a sample ride-sharing dataset (users, vehicles, rides, payments, ratings) so you can try it end to end.
 
-Key capabilities include:
-- **Smart request routing** — Automatically detects whether you need SQL queries or data transformations
-- **Natural language processing** — Convert plain English into executable operations
-- **Multi-agent coordination** — Specialized agents handle SQL and ETL separately
-- **Safety checks** — Validates database queries before execution
-- **Flexible LLM selection** — Uses faster models for simple tasks, premium models for complex ones
+> **Status:** v1, a working learning/portfolio project. See [Known limitations](#-known-limitations) and [Roadmap](#-roadmap) before using it with real or sensitive data.
 
 ---
 
-## 🏗️ Architecture
-
-The system follows a hierarchical agent architecture:
+## 🏗️ How it works
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Data Agent (Router)                      │
-│         Routes user queries to appropriate sub-agents       │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-         ┌───────────┴───────────┐
-         │                       │
-         ▼                       ▼
-    ┌──────────────┐        ┌──────────────┐
-    │ SQL Analyst  │        │ ETL Analyst  │
-    │   Agent      │        │   Agent      │
-    └──────────────┘        └──────────────┘
-         │                       │
-         ├─► Query Curation      ├─► Extract Load
-         ├─► Schema Context      ├─► Transform Load
-         ├─► SQL Generation      └─► Code Execution
-         ├─► Safety Validation   
-         ├─► Query Execution     
-         └─► Answer Generation   
+                     ┌──────────────────────────────┐
+   Your question ──► │     Data Agent (router)      │
+                     │   Classifies: "sql" or "etl" │
+                     └──────────────┬───────────────┘
+                                    │
+                ┌───────────────────┴───────────────────┐
+                ▼                                       ▼
+     ┌─────────────────────┐                 ┌─────────────────────┐
+     │     SQL Analyst     │                 │     ETL Analyst     │
+     │ (fixed pipeline)    │                 │ (tool-using agent)  │
+     └─────────────────────┘                 └─────────────────────┘
+       1. Rewrite question                     Claude picks a tool and
+       2. Read DB schema + samples             loops until the task is done:
+       3. Generate SQL                         • extract_load_tool
+       4. LLM safety judge                     • transform_load_tool
+       5. Execute (if approved)
+       6. Explain the answer
 ```
 
-### State Flow
+### Data Agent (router): `agents/data_agent.py`
+Claude reads your latest message and returns a structured decision, either `sql` or `etl` (enforced by the `RouterSchema` Pydantic model). The request is then passed to the matching sub-agent.
 
-1. **User Input** → Natural language query
-2. **Router Node** → Classifies query as SQL or ETL
-3. **Agent Dispatch** → Routes to appropriate sub-agent
-4. **Processing** → Each agent processes the task
-5. **Output** → Returns structured result to user
+### SQL Analyst: `agents/sql_analyst.py`
+A fixed LangGraph pipeline:
+
+1. **Curate question**: a fast model rewrites the question more clearly.
+2. **Build context**: reads every table's columns, data types, and 5 sample rows from PostgreSQL.
+3. **Generate SQL**: Claude writes a PostgreSQL query (limited to 10 rows unless you ask for more).
+4. **Safety judge**: a second Claude call answers Yes/No on whether the query is read-only.
+5. **Execute or cancel**: approved queries run; rejected ones stop with an explanation.
+6. **Final answer**: the raw result is turned into a short, plain-English answer.
+
+![SQL Analyst workflow](sql_analyst_graph.png)
+
+### ETL Analyst: `agents/etl_analyst.py`
+A tool-calling agent. Claude decides which tool to call, sees the result, and continues until the task is complete.
+
+- **`extract_load_tool`**: calls an API URL, flattens the JSON `results` list with `pandas.json_normalize`, and saves it as `extracted_data.<format>` in the folder you specify.
+- **`transform_load_tool`**: shows Claude the first 3 rows of a CSV/JSON/Parquet file, asks it to write pandas code for your request, then runs that code to save the transformed output.
+
+![ETL Analyst workflow](etl_analyst_graph.png)
 
 ---
 
-## ✨ Features
+## 📊 Sample dataset
 
-### SQL Agent
-- Converts natural language questions into SQL queries
-- Automatically fetches database schema for context
-- Validates queries for safety before execution
-- Protects against destructive operations (INSERT, UPDATE, DELETE, DROP, etc.)
-- Formats and returns results clearly
+The `data/` folder contains a synthetic ride-sharing dataset for a company operating in Canadian cities (Halifax, Vancouver, Winnipeg, Montreal, and others).
 
-### ETL Agent
-- Extracts data from APIs and converts JSON responses to structured formats
-- Transforms data using Pandas for filtering, aggregation, and restructuring
-- Supports multiple output formats: CSV, JSON, and Parquet
-- Generates and executes code safely in a controlled environment
+| Table | Rows | What it contains |
+|---|---:|---|
+| `users` | 10,000 | 7,000 riders and 3,000 drivers: name, email, phone, city, province, signup date |
+| `vehicles` | 3,000 | Each driver's car: make, model, year, colour, licence plate |
+| `rides` | 20,000 | Pickup/drop-off times and coordinates, distance, fare, surge multiplier, status, cancellation reason |
+| `payments` | 16,073 | One per completed ride: amount, method (card, PayPal, Apple Pay, Google Pay), status |
+| `ratings` | 12,000 | 1–5 star rating and comment for a ride |
 
-### Intelligent Design
-- **Request Classification** — Automatically identifies whether you need SQL queries or data transformations
-- **Dynamic Model Selection** — Uses cost-effective models for simple queries, premium Claude for complex tasks
-- **Built-in Safety** — All operations are validated before execution
-- **Structured Data** — Uses Pydantic for reliable data validation across the system
+Tables are linked by IDs (for example, `rides.driver_id → users.user_id`, `payments.ride_id → rides.ride_id`). `utils/feed_db.py` creates the tables with primary keys, foreign keys, a 1–5 rating check, and indexes, then bulk-loads the CSVs with PostgreSQL `COPY`.
+
+All names, emails, and phone numbers are fake (emails use `@example.com`).
 
 ---
 
 ## 📦 Prerequisites
 
-- Python 3.12+
-- PostgreSQL database (for SQL operations)
-- API keys for LLM providers (Claude and/or OpenAI)
-- Virtual environment (recommended)
+- **Python 3.11+**
+- **[uv](https://docs.astral.sh/uv/)** (recommended) or pip
+- **PostgreSQL** running locally or remotely
+- An **Anthropic API key** ([console.anthropic.com](https://console.anthropic.com/))
+- An internet connection (for the Claude API, API extraction, and graph image rendering)
 
 ---
 
-## 🚀 Installation
+## 🚀 Setup
 
-### Step 1: Set up your environment
+### 1. Clone the repository
 
 ```bash
-cd Data_Agent
+git clone https://github.com/Darpanjiyani/AI-Data-Agent.git
+cd AI-Data-Agent
+```
+
+### 2. Install dependencies
+
+With uv (uses `pyproject.toml` and `uv.lock`):
+
+```bash
+uv sync
+```
+
+Or with pip:
+
+```bash
 python -m venv .venv
-
-# Activate the virtual environment
-# Windows:
+# Windows
 .\.venv\Scripts\Activate.ps1
-# macOS/Linux:
+# macOS / Linux
 source .venv/bin/activate
+
+pip install dotenv ipython langchain langchain-anthropic langgraph pandas psycopg2-binary pydantic
 ```
 
-### Step 2: Install dependencies
+To save files in **Parquet** format, also install `pyarrow` (`uv add pyarrow` or `pip install pyarrow`).
 
-```bash
-pip install -r requirements.txt
+### 3. Create the database
+
+In psql or pgAdmin:
+
+```sql
+CREATE DATABASE ride_share;
 ```
 
-The project requires:
-- **langchain** — LLM framework
-- **langgraph** — Multi-agent orchestration
-- **langchain-anthropic** — Claude integration
-- **langchain-openai** — OpenAI integration
-- **pandas** — Data manipulation
-- **psycopg2** — PostgreSQL driver
-- **pydantic** — Data validation
-- **python-dotenv** — Configuration management
+### 4. Create a `.env` file
 
-### Step 3: Configure your credentials
-
-Create a `.env` file in the root directory with your API keys and database settings:
+Create `.env` in the project root. The agents and the data loader currently read different variable names, so include both sets:
 
 ```env
-# API Keys
-ANTHROPIC_API_KEY=your_claude_key
-OPENAI_API_KEY=your_openai_key
+# Anthropic
+ANTHROPIC_API_KEY=your_anthropic_api_key
 
-# PostgreSQL Database
+# Used by the agents (agents/sql_analyst.py, utils/database.py)
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=ride_share
+DB_USER=postgres
+DB_PASSWORD=your_password
+
+# Used by the data loader (utils/feed_db.py)
 host=localhost
 port=5432
+database=ride_share
 user=postgres
 password=your_password
-database=data_agent_db
-
-# Optional: Custom Model Selection
-LLM_MODEL_LOW=claude-haiku-4-5-20251001
-LLM_MODEL_MEDIUM=claude-sonnet-5
-LLM_MODEL_HIGH=claude-opus-5
 ```
 
----
+`.env` is listed in `.gitignore`. Never commit it or share it.
 
-## 📁 Project Structure
+### 5. Load the sample data
 
-```
-Data_Agent/
-├── agents/                          # Agent implementations
-│   ├── __init__.py
-│   ├── data_agent.py               # Main router agent
-│   ├── sql_analyst.py              # SQL query agent
-│   └── etl_analyst.py              # ETL operations agent
-│
-├── Models/                          # Data models
-│   ├── __init__.py
-│   └── schema.py                   # Pydantic schemas for state management
-│
-├── utils/                           # Utility modules
-│   ├── __init__.py
-│   ├── database.py                 # PostgreSQL utilities
-│   ├── etl_tools.py                # ETL operations toolkit
-│   ├── llm_pick.py                 # LLM selection logic
-│
-├── data/                            # Data directory
-│   ├── extract/                     # Extracted data storage
-│   ├── transform/                   # Transformed data storage
-│   ├── payments.csv                 # Sample dataset
-│   ├── ratings.csv                  # Sample dataset
-│   ├── rides.csv                    # Sample dataset
-│   ├── users.csv                    # Sample dataset
-│   └── vehicles.csv                 # Sample dataset
-│
-├── main.py                          # Entry point
-├── feed_db.py                       # Database initialization script
-├── pyproject.toml                   # Project metadata and dependencies
-└── README.md                         # This file
+Run this **once** from the project root:
+
+```bash
+uv run utils/feed_db.py
+# or: python utils/feed_db.py
 ```
 
----
-
-## ⚙️ Configuration
-
-The system adapts its behavior based on task complexity:
-
-**LLM Selection** (`utils/llm_pick.py`)
-- Simple queries use fast, cost-effective models
-- Moderate complexity uses balanced models
-- Complex tasks use Claude for maximum capability
-
-**Database Connection** (`utils/database.py`)
-- Reads PostgreSQL credentials from `.env`
-- Automatically fetches schema information
-- Manages connection pooling and error handling
+It prints the record count for each table when finished. Running it a second time will fail on duplicate primary keys; to reload from scratch, uncomment the `TRUNCATE` block in `utils/feed_db.py`.
 
 ---
 
 ## 💻 Usage
 
-### As a Python Module
+Run all commands from the project root.
+
+### Run the full system
+
+```bash
+uv run main.py
+```
+
+`main.py` sends one example request (extracting Pokémon data from the PokéAPI) to the router. Edit the message in `main.py` to ask your own question.
+
+### Use it from Python
 
 ```python
 from agents.data_agent import data_agent
 from langchain_core.messages import HumanMessage
 
 response = data_agent.invoke({
-    "messages": [
-        HumanMessage(content="Show me the top 5 users by rating")
-    ],
-    "route_response": ""
+    "messages": [HumanMessage(content="Which 5 drivers have the highest average rating?")],
+    "route_response": "",
 })
 
-print(response)
+print(response["messages"][-1])
 ```
 
-### From the Command Line
+### Run a single agent
 
 ```bash
-python main.py          # Run the interactive agent
-python agents/sql_analyst.py   # Run just the SQL agent
-python agents/etl_analyst.py   # Run just the ETL agent
+uv run agents/sql_analyst.py   # asks about payment methods, prints SQL + result
+uv run agents/etl_analyst.py   # extracts PokéAPI data to data/extract/
 ```
 
-Just ask natural language questions — the system figures out whether you need SQL or ETL and handles it accordingly.
+Running an agent file directly also regenerates its workflow diagram (`*_graph.png`).
 
 ---
 
-## 🤖 Agent Descriptions
+## 📚 Example requests
 
-### Data Agent (Router)
-**File:** `agents/data_agent.py`
+**SQL (answered from the database)**
+- "What are the different payment methods in our database?"
+- "How many rides were cancelled, grouped by cancellation reason?"
+- "Which 5 drivers have the highest average rating?"
+- "What is the total revenue from completed payments by payment method?"
 
-The main entry point that understands your intent and directs the request to the right specialist. It analyzes whether you're asking for a database query or a data transformation, then invokes the appropriate agent.
+**ETL: extract from an API**
+- "Extract the data from https://pokeapi.co/api/v2/pokemon and save it to data/extract as CSV."
 
-### SQL Analyst Agent
-**File:** `agents/sql_analyst.py`
-
-Handles all database questions by converting them into SQL. The workflow is:
-1. Understands your question clearly
-2. Fetches the database schema for context
-3. Generates a SQL query
-4. Validates the query for safety (no DELETE, DROP, etc.)
-5. Executes the query and returns results
-
-**Protection:** Blocks destructive operations and limits results to 10 rows by default.
-
-### ETL Analyst Agent
-**File:** `agents/etl_analyst.py`
-
-Handles data extraction and transformation tasks. It can:
-- Extract data from APIs and normalize JSON responses
-- Transform existing CSV/JSON files using Pandas
-- Save results in CSV, JSON, or Parquet format
-
-All code generation and execution happens in a controlled, safe environment.
+**ETL: transform a file**
+- "Read data/extract/extracted_data.csv, keep only Pokémon whose name starts with 'c', and save the result to data/transform as CSV."
 
 ---
 
-## 📊 Data Models
+## 📁 Project structure
 
-The system uses Pydantic models for type-safe state management:
-
-- **AgentSchema** — Tracks SQL processing (questions, generated queries, safety checks, results)
-- **ETLAgentSchema** — Manages conversation history for ETL operations
-- **RouterSchema** — Classifies requests as SQL or ETL with reasoning
-- **DataAgentSchema** — Top-level state holding messages and routing decisions
-
-See `Models/schema.py` for complete definitions.
+```
+AI-Data-Agent/
+├── agents/
+│   ├── data_agent.py        # Router: sends requests to the SQL or ETL agent
+│   ├── sql_analyst.py       # Natural language → SQL → answer pipeline
+│   └── etl_analyst.py       # Tool-calling agent for extract/transform tasks
+├── Models/
+│   └── schema.py            # Pydantic state models (AgentSchema, ETLAgentSchema, RouterSchema, ...)
+├── utils/
+│   ├── database.py          # PostgreSQL connection, schema reader, query runner
+│   ├── etl_tools.py         # API extraction, file reading, pandas code execution
+│   ├── feed_db.py           # Creates tables and loads the CSV dataset
+│   └── llm_pick.py          # Chooses the Claude model for each step
+├── data/
+│   ├── extract/             # Output of API extractions
+│   ├── users.csv
+│   ├── vehicles.csv
+│   ├── rides.csv
+│   ├── payments.csv
+│   └── ratings.csv
+├── main.py                  # Entry point with an example request
+├── data_agent_graph.png     # Router workflow diagram
+├── sql_analyst_graph.png    # SQL agent workflow diagram
+├── etl_analyst_graph.png    # ETL agent workflow diagram
+├── test_schema_details.txt  # Example of the schema context sent to the model
+├── pyproject.toml
+└── uv.lock
+```
 
 ---
 
-## 📚 Examples
+## ⚙️ Model selection
 
-**SQL Query — Database Analysis**
-```
-"Show me the average rating for each vehicle type"
-```
-Result: Router → SQL Agent → Schema lookup → SQL generation → Safety check → Database query
+`utils/llm_pick.py` maps each step to a Claude model, using a smaller, faster model for simple steps and a stronger model for harder ones:
 
-**API Data Extraction**
-```
-"Extract Pokémon data from https://pokeapi.co/api/v2/pokemon and save as CSV"
-```
-Result: Router → ETL Agent → API request → Normalize JSON → Save to data/extract/
+| Level | Model configured | Used for |
+|---|---|---|
+| `low` | Claude Haiku | Rewriting the question, writing the final answer |
+| `medium` | Claude Sonnet | Generating SQL, safety judge |
+| `claude` | Claude Sonnet | Router, ETL agent, pandas code generation |
+| `high` | Claude Opus | Defined but not used yet |
 
-**Data Transformation**
-```
-"Filter rides.csv to show only ratings above 4.0 and save as JSON"
-```
-Result: Router → ETL Agent → Generate Pandas code → Execute safely → Save to data/transform/
+Model names are set in `utils/llm_pick.py`. Change them there to use different models.
 
 ---
 
-## 🔐 Security
+## 🔐 Safety
 
-- **SQL Safety** — All queries are analyzed before execution; destructive operations (INSERT, UPDATE, DELETE, DROP, ALTER) are blocked
-- **Safe Code Execution** — Generated Python code runs in a controlled sandbox
-- **Credential Management** — API keys and database passwords are read from `.env`, never hardcoded
-- **Input Validation** — All inputs are validated using Pydantic schemas
+**SQL Analyst**
+- Every generated query is reviewed by an LLM "judge" before it runs. Queries that would modify data (INSERT, UPDATE, DELETE, DROP, ALTER, etc.) should be rejected.
+- Results are limited to 10 rows by default.
+- **Recommended:** connect the agent with a PostgreSQL user that only has `SELECT` permission, so the database itself blocks any write, even if the judge makes a mistake.
 
----
+**ETL Analyst**
+- ⚠️ The transform tool runs AI-generated pandas code with Python's `exec()` **in the same process, without a sandbox**. Only use it on your own machine, with trusted files and requests.
 
-## 🛠️ Extending the System
+**Credentials**
+- API keys and database passwords are read from `.env`, which is excluded from Git.
 
-**Add a New Agent:**
-1. Create a file in `agents/`
-2. Define its state schema in `Models/schema.py`
-3. Implement the agent logic using LangGraph
-4. Update the router in `data_agent.py`
-
-**Add ETL Tools:**
-Edit `utils/etl_tools.py` and add tools using the `@tool` decorator for the agent to discover.
-
-**Customize Model Selection:**
-Modify `utils/llm_pick.py` to change which models are used for different complexity levels.
+**Data privacy**
+- Sample rows from each table are sent to the Claude API as context. That's fine for this synthetic dataset; mask sensitive columns before using real customer data.
 
 ---
 
-## 🚨 Common Issues
+## 🚧 Known limitations
+
+- The SQL safety check is an LLM decision, not a guaranteed rule.
+- AI-generated ETL code is executed with `exec()` and no isolation.
+- The router only sees the latest message, so follow-up questions ("now group that by city") don't have context yet.
+- Query results are passed to the answer step without column names.
+- The extract tool expects the API response to contain a `results` list and only fetches the first page.
+- `utils/database.py` connects to PostgreSQL when it is imported, so the database must be reachable even for ETL-only requests.
+- Each SQL question uses about five Claude calls (router, rewrite, generate, judge, answer).
+
+---
+
+## 🗺️ Roadmap
+
+**Safety**
+- [ ] Read-only database user with a query timeout
+- [ ] Rule-based SQL validation (single `SELECT` statement only) before the LLM judge
+- [ ] Run generated ETL code in an isolated process with a time limit
+
+**Accuracy**
+- [ ] Return column names with query results
+- [ ] Self-correcting SQL: retry with the error message when a query fails
+- [ ] Add foreign keys and a business glossary to the schema context
+- [ ] Conversation memory with a LangGraph checkpointer
+- [ ] Evaluation set of questions with known answers
+
+**Features**
+- [ ] Streamlit chat interface showing the answer, generated SQL, and result table
+- [ ] Automatic charts for query results
+- [ ] Load transformed data into PostgreSQL (with human approval)
+- [ ] Pagination and authentication support for API extraction
+
+---
+
+## 🛠️ Tech stack
+
+| Area | Tools |
+|---|---|
+| Agent orchestration | LangGraph |
+| LLM framework | LangChain, `langchain-anthropic` |
+| Models | Claude (Haiku, Sonnet) |
+| Database | PostgreSQL, `psycopg2` |
+| Data processing | pandas |
+| Validation | Pydantic |
+| Config | python-dotenv |
+| Packaging | uv |
+
+---
+
+## 🧩 Extending the system
+
+**Add a new agent**
+1. Create a file in `agents/` and build its LangGraph workflow.
+2. Add its state model to `Models/schema.py`.
+3. Add a new option to `RouterSchema.answer` and a matching node and route in `agents/data_agent.py`.
+
+**Add an ETL tool**
+Define a function with the `@tool` decorator in `agents/etl_analyst.py` and add it to the `tools` list.
+
+---
+
+## 🚨 Troubleshooting
 
 | Problem | Solution |
-|---------|----------|
-| Database connection fails | Verify PostgreSQL is running and `.env` credentials are correct |
-| API key not found | Ensure `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are in `.env` |
-| Query rejected as unsafe | Rewrite as SELECT-only; the system blocks INSERT, UPDATE, DELETE, DROP |
-| Module not found | Activate the virtual environment: `.venv\Scripts\Activate.ps1` (Windows) or `source .venv/bin/activate` (macOS/Linux) |
+|---|---|
+| `Error connecting to the database` | Check PostgreSQL is running and the `DB_*` values in `.env` are correct |
+| `KeyError: 'host'` when loading data | Add the lowercase `host`, `port`, `database`, `user`, `password` entries to `.env` |
+| `TypeError: int() argument must be ... not 'NoneType'` | `DB_PORT` is missing from `.env` |
+| Authentication error from Anthropic | Check `ANTHROPIC_API_KEY` in `.env` |
+| Duplicate key error when loading data | Data is already loaded; uncomment the `TRUNCATE` block to reload |
+| `ModuleNotFoundError` | Run commands from the project root, using `uv run` or an activated virtual environment |
+| Parquet save fails | Install `pyarrow` |
+| Query rejected as unsafe | Rephrase as a read-only question; the agent only runs `SELECT` queries |
 
 ---
 
-## 📈 Tips for Better Performance
+## 📚 Learn more
 
-- Simple queries automatically use faster models to reduce latency and cost
-- Add database indexes on frequently queried columns
-- Respect API rate limits when extracting from external sources
-- For large transformations, consider breaking them into smaller steps
+- [LangGraph documentation](https://langchain-ai.github.io/langgraph/)
+- [LangChain documentation](https://python.langchain.com/)
+- [Claude API documentation](https://docs.anthropic.com/)
+- [PostgreSQL documentation](https://www.postgresql.org/docs/)
 
 ---
 
-## 📚 Learning Resources
-
-To understand the technologies used:
-- [LangGraph](https://langchain-ai.github.io/langgraph/) — Multi-agent orchestration
-- [LangChain](https://python.langchain.com/) — LLM framework
-- [Claude API](https://docs.anthropic.com/) — Anthropic's models
-- [PostgreSQL](https://www.postgresql.org/docs/) — Database system
+Built by [Darpanjiyani](https://github.com/Darpanjiyani)
