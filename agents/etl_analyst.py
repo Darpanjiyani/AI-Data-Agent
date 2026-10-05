@@ -171,14 +171,6 @@ if __name__ == "__main__":
 
     response = etl_analyst.invoke(
         {"messages":[HumanMessage(content="I want to extract the data from the API endpoint 'https://pokeapi.co/api/v2/pokemon' and save it to data/extract folder in the csv folder")]}
-    )
-
-#     response = etl_analyst.invoke(
-#          {"messages":[HumanMessage(content=f"""
-#             I want to transform the data stored in the 'c:\\Data_Agent\\data\\extract\\extracted_data.csv' file 
-#             and save the transformed data in the 'c:\\Data_Agent\\data\\transform' folder in the csv format.
-#             The transformation should filter the data to show bulbasaur pokemon only.
-# """)]}
-#     )    
+    ) 
 
     print(response)

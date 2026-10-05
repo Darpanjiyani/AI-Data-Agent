@@ -23,12 +23,14 @@ def pick_llm(level: str):
         })
     elif level.lower() == "medium":
         llm = ChatAnthropic(model="claude-sonnet-5", model_kwargs={
-            "reasoning_effort": "medium"
+            "reasoning_effort": "none"
         })
     elif level.lower() == "high":
         llm = ChatAnthropic(model="claude-opus-5", temperature = 0, model_kwargs={
-            "reasoning_effort": "high"
+            "reasoning_effort": "none"
         })
+    elif level.lower() == "claude":
+        llm = ChatAnthropic(model_name="claude-sonnet-5")
     else:
         raise ValueError(f"Unsupported level: {level}")
     
