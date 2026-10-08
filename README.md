@@ -30,8 +30,8 @@ The project ships with a sample ride-sharing dataset (users, vehicles, rides, pa
        1. Rewrite question                     Claude picks a tool and
        2. Read DB schema + samples             loops until the task is done:
        3. Generate SQL                         • extract_load_tool
-       4. LLM safety judge                     • transform_load_tool
-       5. Execute (if approved)
+       4. SQL guard + LLM safety judge         • transform_load_tool
+       5. Execute as read-only user
        6. Explain the answer
 ```
 
@@ -44,17 +44,19 @@ A fixed LangGraph pipeline:
 1. **Curate question**: a fast model rewrites the question more clearly.
 2. **Build context**: reads every table's columns, data types, and 5 sample rows from PostgreSQL.
 3. **Generate SQL**: Claude writes a PostgreSQL query (limited to 10 rows unless you ask for more).
-4. **Safety judge**: a second Claude call answers Yes/No on whether the query is read-only.
-5. **Execute or cancel**: approved queries run; rejected ones stop with an explanation.
-6. **Final answer**: the raw result is turned into a short, plain-English answer.
+4. **Safety checks**: a rule-based SQL guard (`sqlglot`) allows only a single read-only `SELECT`; queries that pass are then reviewed by a Claude "judge" as a second opinion.
+5. **Execute or cancel**: approved queries run through a read-only PostgreSQL user; rejected ones stop with an explanation.
+6. **Final answer**: the result (with column names) is turned into a short, plain-English answer.
 
 ![SQL Analyst workflow](sql_analyst_graph.png)
 
 ### ETL Analyst: `agents/etl_analyst.py`
 A tool-calling agent. Claude decides which tool to call, sees the result, and continues until the task is complete.
 
-- **`extract_load_tool`**: calls an API URL, flattens the JSON `results` list with `pandas.json_normalize`, and saves it as `extracted_data.<format>` in the folder you specify.
-- **`transform_load_tool`**: shows Claude the first 3 rows of a CSV/JSON/Parquet file, asks it to write pandas code for your request, then runs that code to save the transformed output.
+- **`extract_load_tool`**: calls an API URL, flattens the JSON (the `results` list if there is one) with `pandas.json_normalize`, and saves it as `extracted_data.<format>` in a folder inside `data/`.
+- **`transform_load_tool`**: shows Claude the first 3 rows of a CSV/JSON/Parquet file, asks it to write pandas code for your request, then runs that code in a separate process with a time limit to save the transformed output.
+
+Both tools only accept file paths inside the project's `data/` folder.
 
 ![ETL Analyst workflow](etl_analyst_graph.png)
 
@@ -114,10 +116,8 @@ python -m venv .venv
 # macOS / Linux
 source .venv/bin/activate
 
-pip install dotenv ipython langchain langchain-anthropic langgraph pandas psycopg2-binary pydantic
+pip install dotenv ipython langchain langchain-anthropic langgraph pandas psycopg2-binary pydantic requests sqlglot pyarrow
 ```
-
-To save files in **Parquet** format, also install `pyarrow` (`uv add pyarrow` or `pip install pyarrow`).
 
 ### 3. Create the database
 
@@ -127,32 +127,45 @@ In psql or pgAdmin:
 CREATE DATABASE ride_share;
 ```
 
-### 4. Create a `.env` file
+### 4. Create a read-only database user
 
-Create `.env` in the project root. The agents and the data loader currently read different variable names, so include both sets:
+The agent never uses your admin account. Connected as your admin user (for example `postgres`), run this in psql or pgAdmin, choosing your own password:
 
-```env
-# Anthropic
-ANTHROPIC_API_KEY=your_anthropic_api_key
+```sql
+CREATE ROLE agent_reader LOGIN PASSWORD 'choose_a_strong_password';
 
-# Used by the agents (agents/sql_analyst.py, utils/database.py)
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=ride_share
-DB_USER=postgres
-DB_PASSWORD=your_password
+GRANT CONNECT ON DATABASE ride_share TO agent_reader;
+GRANT USAGE ON SCHEMA public TO agent_reader;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO agent_reader;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO agent_reader;
 
-# Used by the data loader (utils/feed_db.py)
-host=localhost
-port=5432
-database=ride_share
-user=postgres
-password=your_password
+ALTER ROLE agent_reader SET default_transaction_read_only = on;
+ALTER ROLE agent_reader SET statement_timeout = '15s';
+
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 ```
+
+Run this while connected to the `ride_share` database (the `GRANT ... SCHEMA public` lines apply to the database you're connected to). It can be run before or after loading the data in step 6.
+
+### 5. Create a `.env` file
+
+Copy `.env.example` to `.env` and fill in your values:
+
+```bash
+cp .env.example .env        # macOS / Linux
+copy .env.example .env      # Windows
+```
+
+| Variables | Used by |
+|---|---|
+| `ANTHROPIC_API_KEY` | All agents |
+| `DB_HOST`, `DB_PORT`, `DB_NAME` | Database connection |
+| `DB_READER_USER`, `DB_READER_PASSWORD` | The agent (read-only user from step 4) |
+| Lowercase `host`, `port`, `database`, `user`, `password` | Only `utils/feed_db.py` (admin user, to create tables and load data) |
 
 `.env` is listed in `.gitignore`. Never commit it or share it.
 
-### 5. Load the sample data
+### 6. Load the sample data
 
 Run this **once** from the project root:
 
@@ -230,7 +243,8 @@ AI-Data-Agent/
 │   └── schema.py            # Pydantic state models (AgentSchema, ETLAgentSchema, RouterSchema, ...)
 ├── utils/
 │   ├── database.py          # PostgreSQL connection, schema reader, query runner
-│   ├── etl_tools.py         # API extraction, file reading, pandas code execution
+│   ├── etl_tools.py         # API extraction, file reading, isolated code execution
+│   ├── sql_guard.py         # Rule-based check: only one read-only SELECT allowed
 │   ├── feed_db.py           # Creates tables and loads the CSV dataset
 │   └── llm_pick.py          # Chooses the Claude model for each step
 ├── data/
@@ -241,6 +255,7 @@ AI-Data-Agent/
 │   ├── payments.csv
 │   └── ratings.csv
 ├── main.py                  # Entry point with an example request
+├── .env.example             # Template for your .env file
 ├── data_agent_graph.png     # Router workflow diagram
 ├── sql_analyst_graph.png    # SQL agent workflow diagram
 ├── etl_analyst_graph.png    # ETL agent workflow diagram
@@ -268,16 +283,21 @@ Model names are set in `utils/llm_pick.py`. Change them there to use different m
 
 ## 🔐 Safety
 
-**SQL Analyst**
-- Every generated query is reviewed by an LLM "judge" before it runs. Queries that would modify data (INSERT, UPDATE, DELETE, DROP, ALTER, etc.) should be rejected.
-- Results are limited to 10 rows by default.
-- **Recommended:** connect the agent with a PostgreSQL user that only has `SELECT` permission, so the database itself blocks any write, even if the judge makes a mistake.
+**SQL Analyst: three layers of protection**
+1. **SQL guard** (`utils/sql_guard.py`): a `sqlglot` parser allows only a single read-only `SELECT`. It blocks writes, DDL, multiple statements, `SELECT ... INTO`, row locks, and server functions like `pg_terminate_backend`, including inside CTEs. Blocked queries never reach the LLM judge or the database.
+2. **LLM judge**: queries that pass the guard are reviewed by Claude as a second opinion.
+3. **Read-only database user**: the agent connects as `agent_reader`, which only has `SELECT` permission, read-only transactions, and a 15-second query timeout. Even if a query got past both checks, PostgreSQL would refuse to change anything.
+
+Results are limited to 10 rows by default.
 
 **ETL Analyst**
-- ⚠️ The transform tool runs AI-generated pandas code with Python's `exec()` **in the same process, without a sandbox**. Only use it on your own machine, with trusted files and requests.
+- AI-generated pandas code runs in a **separate Python process** with a 60-second time limit, so it can't crash or freeze the app.
+- That process does not receive your API key or database passwords.
+- Both ETL tools only accept file paths inside the project's `data/` folder.
+- ⚠️ This is isolation, not a full sandbox: the generated code can still read and write files your user account can access. Use it on your own machine with trusted requests.
 
 **Credentials**
-- API keys and database passwords are read from `.env`, which is excluded from Git.
+- API keys and database passwords are read from `.env`, which is excluded from Git. `.env.example` shows the variables without values.
 
 **Data privacy**
 - Sample rows from each table are sent to the Claude API as context. That's fine for this synthetic dataset; mask sensitive columns before using real customer data.
@@ -286,29 +306,27 @@ Model names are set in `utils/llm_pick.py`. Change them there to use different m
 
 ## 🚧 Known limitations
 
-- The SQL safety check is an LLM decision, not a guaranteed rule.
-- AI-generated ETL code is executed with `exec()` and no isolation.
+- Generated ETL code is isolated in a separate process but not fully sandboxed (see Safety).
 - The router only sees the latest message, so follow-up questions ("now group that by city") don't have context yet.
-- Query results are passed to the answer step without column names.
-- The extract tool expects the API response to contain a `results` list and only fetches the first page.
-- `utils/database.py` connects to PostgreSQL when it is imported, so the database must be reachable even for ETL-only requests.
-- Each SQL question uses about five Claude calls (router, rewrite, generate, judge, answer).
+- The extract tool fetches only the first page of paginated APIs and doesn't support authentication yet.
+- A typical SQL question uses about five Claude calls (router, rewrite, generate, judge, answer).
 
 ---
 
 ## 🗺️ Roadmap
 
 **Safety**
-- [ ] Read-only database user with a query timeout
-- [ ] Rule-based SQL validation (single `SELECT` statement only) before the LLM judge
-- [ ] Run generated ETL code in an isolated process with a time limit
+- [x] Read-only database user with a query timeout
+- [x] Rule-based SQL validation (single `SELECT` statement only) before the LLM judge
+- [x] Run generated ETL code in an isolated process with a time limit
+- [ ] Run generated ETL code in a container for full sandboxing
 
 **Accuracy**
-- [ ] Return column names with query results
+- [x] Return column names with query results
+- [ ] Evaluation set of questions with known answers
 - [ ] Self-correcting SQL: retry with the error message when a query fails
 - [ ] Add foreign keys and a business glossary to the schema context
 - [ ] Conversation memory with a LangGraph checkpointer
-- [ ] Evaluation set of questions with known answers
 
 **Features**
 - [ ] Streamlit chat interface showing the answer, generated SQL, and result table
@@ -350,13 +368,15 @@ Define a function with the `@tool` decorator in `agents/etl_analyst.py` and add 
 | Problem | Solution |
 |---|---|
 | `Error connecting to the database` | Check PostgreSQL is running and the `DB_*` values in `.env` are correct |
+| `DB_READER_USER and DB_READER_PASSWORD must be set` | Create the read-only user (Setup step 4) and add both values to `.env` |
+| `permission denied for table ...` | Run the `GRANT SELECT ...` lines from Setup step 4 while connected to your database |
 | `KeyError: 'host'` when loading data | Add the lowercase `host`, `port`, `database`, `user`, `password` entries to `.env` |
-| `TypeError: int() argument must be ... not 'NoneType'` | `DB_PORT` is missing from `.env` |
 | Authentication error from Anthropic | Check `ANTHROPIC_API_KEY` in `.env` |
 | Duplicate key error when loading data | Data is already loaded; uncomment the `TRUNCATE` block to reload |
 | `ModuleNotFoundError` | Run commands from the project root, using `uv run` or an activated virtual environment |
-| Parquet save fails | Install `pyarrow` |
 | Query rejected as unsafe | Rephrase as a read-only question; the agent only runs `SELECT` queries |
+| `Path must be inside the data/ folder` | Use input and output paths under `data/`, for example `data/extract/` |
+| `ran longer than 60 seconds and was stopped` | Split the transformation into smaller steps, or raise `CODE_TIMEOUT_SECONDS` in `utils/etl_tools.py` |
 
 ---
 

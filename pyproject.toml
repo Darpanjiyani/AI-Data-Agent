@@ -12,5 +12,8 @@ dependencies = [
     "langgraph>=1.2.11",
     "pandas>=3.0.6",
     "psycopg2-binary>=2.9.12",
+    "pyarrow>=25.0.1",
     "pydantic>=2.13.5",
+    "requests>=2.34.2",
+    "sqlglot>=30.21.0",
 ]

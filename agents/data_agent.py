@@ -31,9 +31,7 @@ def router_node(state:DataAgentSchema):
 
     route_response = route_response_dict['answer']
 
-    state.route_response = route_response
-
-    return state
+    return {"route_response": route_response}
 
 def etl_node(state:DataAgentSchema):
 
@@ -44,9 +42,8 @@ def etl_node(state:DataAgentSchema):
             {message}
     """)]}
         ) 
-    state.messages = state.messages + [response]
-
-    return state
+    # Add only the ETL agent's final reply to the conversation
+    return {"messages": [response["messages"][-1]]}
 
 def sql_node(state:DataAgentSchema):
 
@@ -66,9 +63,8 @@ def sql_node(state:DataAgentSchema):
 
     response = sql_analyst.invoke(input_schema)
 
-    state.messages = state.messages + [response]
-
-    return state
+    # Add only the SQL agent's final answer to the conversation
+    return {"messages": [AIMessage(content=response["final_answer"])]}
 
 
 data_agent_graph = StateGraph(DataAgentSchema)
@@ -96,15 +92,14 @@ data_agent_graph.add_conditional_edges("router_node", route_edge,
 
 data_agent = data_agent_graph.compile()
 
-# Optional|
-from IPython.display import display, Image
-img = Image(data_agent.get_graph().draw_mermaid_png())
-with open("data_agent_graph.png", "wb") as f:
-    f.write(img.data)
-
-
 
 if __name__ == "__main__":
+
+    # Optional: save a picture of the graph (needs internet for Mermaid rendering)
+    from IPython.display import Image
+    img = Image(data_agent.get_graph().draw_mermaid_png())
+    with open("data_agent_graph.png", "wb") as f:
+        f.write(img.data)
 
     response = data_agent.invoke(
         {"messages":[HumanMessage(content="I want to extract the data from the API endpoint 'https://pokeapi.co/api/v2/pokemon' and save it to data/extract folder in the csv folder")],

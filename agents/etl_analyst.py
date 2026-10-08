@@ -4,12 +4,22 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.llm_pick import pick_llm
-from utils.etl_tools import ETLTools
+from utils.etl_tools import ETLTools, resolve_data_path
 from Models.schema import ETLAgentSchema
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
 from langchain.tools import tool
 from langchain_anthropic import ChatAnthropic
+import re
+
+
+def clean_code(text: str) -> str:
+    """Extract the code from a ```python ... ``` block, if there is one."""
+    text = text.strip()
+    match = re.search(r"```(?:python)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if match:
+        text = match.group(1)
+    return text.strip()
 
 
 #------------------------------------ AGENT TOOLS ------------------------------------#
@@ -41,42 +51,58 @@ def transform_load_tool(input_file_path:str,output_folder:str,output_format:str,
     desired location (output_folder).
 
     Args:
-        input_file_path (str): The path to the file containing the data to be transformed.
-        output_folder (str): The folder where the transformed data will be saved.
+        input_file_path (str): The path to the file containing the data to be transformed (inside the data/ folder).
+        output_folder (str): The folder where the transformed data will be saved (inside the data/ folder).
         output_format (str): The format in which to save the transformed data (csv, json, parquet).
-    
+        user_question (str): The user's request describing the transformation.
+
     Returns:
         str: A message indicating the success or failure of the operation.
 
     """
     etl_tools = ETLTools()
 
-    top_3_rows = etl_tools.transform_load_context(input_file_path)
+    # Both paths must stay inside the project's data/ folder
+    try:
+        input_path = resolve_data_path(input_file_path)
+        output_path = resolve_data_path(output_folder)
+        top_3_rows = etl_tools.transform_load_context(input_file_path)
+    except (ValueError, FileNotFoundError) as e:
+        return f"Could not run the transformation: {e}"
 
     llm = pick_llm("claude")
 
+    # Forward slashes avoid Windows backslash escape problems in generated code
+    input_posix = input_path.as_posix()
+    output_posix = output_path.as_posix()
+
     prompt = f"""
-            You are a Python Data Analyst who uses Pandas to analyze data. 
-            You need to provide only the Pandas Code that will help to perform the right ETL operations on the data stored in the file : {input_file_path}
+            You are a Python Data Analyst who uses Pandas to analyze data.
+            You need to provide only the Pandas Code that will help to perform the right ETL operations on the data stored in the file : {input_posix}
             as per the user's question. Do not provide any explanation or comments, only
-            the code should be provided. The code should be in a format that can be executed 
-            in a Python environment with Pandas installed. 
+            the code should be provided. The code should be in a format that can be executed
+            in a Python environment with Pandas installed.
             Don't write anything else than Pandas Code. \n
-            
-            Create the Pandas Dataframe from the data stored in the file : {input_file_path} and then 
-            write the code to transform and save the data at {output_folder}.
+
+            Create the Pandas Dataframe from the data stored in the file : {input_posix} and then
+            write the code to transform the data and save it as a single {output_format} file
+            inside the folder {output_posix}. Create the folder with os.makedirs(..., exist_ok=True)
+            if it does not exist. Only read and write files inside these paths.
             Here's the user's question: {user_question}\n
             Here's the context of the data you will be analyzing: {top_3_rows}\n
 
         """
 
-    response = llm.invoke(prompt).content 
+    response = llm.invoke(prompt).content
 
-    # Optional Cleaning
-    pandas_code = response.strip().strip('```').strip().lstrip('python').strip()
+    # Remove a ```python ... ``` code fence if the model added one
+    pandas_code = clean_code(response)
 
-    # Execute the Pandas code
+    # Execute the Pandas code in a separate process with a time limit
     results = etl_tools.execute_code(pandas_code)
+
+    if results.startswith("Failed"):
+        return f"The transformation failed. \n\n Pandas Code: \n {pandas_code} \n\n Error: \n {results}"
 
     return f"The data is transformed and saved at {output_folder} in {output_format} format. \n\n Pandas Code Executed: \n {pandas_code} \n\n Execution Result: \n {results}"
 
@@ -104,9 +130,9 @@ def llm_node(state:ETLAgentSchema):
 
     final_answer = llm_bind.invoke(prompt)
 
-    state.messages = messages + [final_answer]
-
-    return state
+    # Return only the fields this step changed. Returning the whole state would
+    # make LangGraph add the existing messages again (the list uses an `add` reducer).
+    return {"messages": [final_answer]}
 
 
 def tool_node(state:ETLAgentSchema):
@@ -127,9 +153,7 @@ def tool_node(state:ETLAgentSchema):
 
         tools_results.append(ToolMessage(content=observation, tool_call_id = tool_call['id']))
 
-    state.messages = state.messages + tools_results
-
-    return state   
+    return {"messages": tools_results}   
 
 
 # Nodes & Edges

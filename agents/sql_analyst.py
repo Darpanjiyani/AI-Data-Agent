@@ -4,7 +4,8 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.llm_pick import pick_llm
-from utils.database import DatabaseUtil
+from utils.database import DatabaseUtil, reader_connection_details
+from utils.sql_guard import is_read_only
 from Models.schema import AgentSchema, JudgeSchema
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
@@ -26,27 +27,28 @@ def curate_ques(state: AgentSchema) -> AgentSchema:
 
     llm = pick_llm("low")  # Pick the appropriate LLM based on the specified level
 
-    response = llm.invoke(f"Curate the following question for better understanding: {user_question}").content
+    prompt = f"""
+    Rewrite the following question about a database so it is clear and specific.
+    Keep the same meaning and do not add new requirements.
+    Return ONLY the rewritten question as a single sentence, with no explanation,
+    headings or alternatives.
 
-    state.curated_ques = response
-    state.messages = state.messages + [HumanMessage(content=f"{response}")]  # Append the curated question to the messages list
+    Question: {user_question}
+    """
 
-    return state    #In Langgraph, return the whole state
+    response = llm.invoke(prompt).content.strip()
+
+    # Return only the fields this step changed. Returning the whole state would
+    # make LangGraph add the existing messages again (the list uses an `add` reducer).
+    return {"curated_ques": response, "messages": [HumanMessage(content=response)]}
 
 
 def prompt_query_context(state: AgentSchema) -> AgentSchema:
 
     curated_question = state.curated_ques
 
-    conn_details = {
-        "host": os.getenv("DB_HOST"),
-        "port": int(os.getenv("DB_PORT")),
-        "dbname": os.getenv("DB_NAME"),
-        "user": os.getenv("DB_USER"),
-        "password": os.getenv("DB_PASSWORD")
-    }
-
-    obj = DatabaseUtil(conn_details)
+    # Always connect with the read-only database user (agent_reader)
+    obj = DatabaseUtil(reader_connection_details())
 
     schema_info = obj.schema_details("public")  # Fetch schema details from the database
 
@@ -69,9 +71,7 @@ def prompt_query_context(state: AgentSchema) -> AgentSchema:
 
     """
 
-    state.prompt_query_context = prompt
-
-    return state
+    return {"prompt_query_context": prompt}
 
 #Generate SQL Query Node
 def generate_sql(state: AgentSchema) -> AgentSchema:
@@ -81,9 +81,7 @@ def generate_sql(state: AgentSchema) -> AgentSchema:
     llm = pick_llm("medium")  # Pick the appropriate LLM based on the specified level
     generated_sql_query = llm.invoke(prompt).content
 
-    state.generated_sql_query = clean_sql(generated_sql_query)
-
-    return state
+    return {"generated_sql_query": clean_sql(generated_sql_query)}
 
 
 # Safe node
@@ -91,6 +89,13 @@ def is_safe_sql(state: AgentSchema) -> AgentSchema:
 
     sql_query = state.generated_sql_query
 
+    # Step 1: rule-based check. Instant, free and always gives the same answer.
+    # If it fails, the query is rejected without calling the LLM judge.
+    allowed, reason = is_read_only(sql_query)
+    if not allowed:
+        return {"is_safe": "No", "comments": f"Blocked by the SQL guard: {reason}"}
+
+    # Step 2: LLM judge as a second opinion.
     llm = pick_llm("medium")
     llm_judge = llm.with_structured_output(JudgeSchema)
 
@@ -103,10 +108,7 @@ def is_safe_sql(state: AgentSchema) -> AgentSchema:
     {sql_query} """
 
     response = llm_judge.invoke(prompt).model_dump()
-    state.is_safe = response['answer'] # Store the judge's response in the state
-    state.comments = response['comments']
-    
-    return state
+    return {"is_safe": response['answer'], "comments": response['comments']}
 
 
 #canceled SQL Query Node
@@ -114,30 +116,20 @@ def canceled_sql(state: AgentSchema) -> AgentSchema:
 
     comments = state.comments
 
-    state.final_answer = f"The generated SQL query was deemed unsafe to execute. The reason provided by the judge is: {comments}. Therefore, the SQL query will not be executed."
-    state.messages = state.messages + [AIMessage(content=f"{state.final_answer}")]
+    final_answer = f"The generated SQL query was deemed unsafe to execute. Reason: {comments}. Therefore, the SQL query will not be executed."
 
-    return state
+    return {"final_answer": final_answer, "messages": [AIMessage(content=final_answer)]}
 
 # Execute SQL Query Node
 def execute_sql(state: AgentSchema) -> AgentSchema:
 
     sql_query = state.generated_sql_query
 
-    conn_details = {
-        "host": os.getenv("DB_HOST"),
-        "port": int(os.getenv("DB_PORT")),
-        "dbname": os.getenv("DB_NAME"),
-        "user": os.getenv("DB_USER"),
-        "password": os.getenv("DB_PASSWORD")
-    }
-
-    obj = DatabaseUtil(conn_details)
+    # Always connect with the read-only database user (agent_reader)
+    obj = DatabaseUtil(reader_connection_details())
 
     execution_result = obj.execute_query(sql_query)
-    state.sql_query_execution_result = execution_result
-
-    return state
+    return {"sql_query_execution_result": execution_result}
 
 # Represent the final answer Node
 def represent_final_answer(state: AgentSchema) -> AgentSchema:
@@ -159,10 +151,7 @@ def represent_final_answer(state: AgentSchema) -> AgentSchema:
 
     llm_response = llm.invoke(prompt).content  # Get the final answer from the LLM
 
-    state.final_answer = llm_response
-    state.messages = state.messages + [AIMessage(content=f"{llm_response}")]  # Append the final answer to the messages list
-
-    return state
+    return {"final_answer": llm_response, "messages": [AIMessage(content=llm_response)]}
 
 
 # -----------------------------------------Graph Building---------------------------------------------------------------
