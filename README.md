@@ -4,9 +4,9 @@ Ask questions about your data in plain English, and let a team of AI agents answ
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue) ![LangGraph](https://img.shields.io/badge/LangGraph-multi--agent-purple) ![Claude](https://img.shields.io/badge/LLM-Claude-orange) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-read--only-336791)
 
-| 47-question eval baseline | SQL safety | Unsafe requests executed | Schema prompt size |
+| Execution accuracy (47 questions) | Hard questions | Unsafe requests executed | SQL prompt size |
 |:---:|:---:|:---:|:---:|
-| **89.4%** execution accuracy | **3 layers** | **0 / 4** | **41% smaller** in Round 2 |
+| **89.4% → 100%** | **76.9% → 100%** | **0 / 4** | **41% smaller** |
 
 ---
 
@@ -38,6 +38,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 **Highlights**
 - Three independent layers of SQL safety; unsafe requests are never executed.
 - A 59-question evaluation harness with execution accuracy and LLM-as-a-judge scoring.
+- Accuracy raised from 89.4% to 100% on the 47 SQL questions through measured improvement rounds.
 - Measured, documented improvement rounds: each change is evaluated before and after.
 
 ---
@@ -297,14 +298,25 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 | v1.0 | Original multi-agent system | not measured¹ | – | – | – |
 | v1.1 | Round 1: safety hardening and bug fixes | not measured² | – | – | – |
 | v1.2 | Evaluation baseline (47 SQL questions) | **89.4%** | **89.4%** | 4,959 | 6.5 s |
-| v2.0 | Round 2: schema context and SQL rules | *pending* | *pending* | *pending* | *pending* |
+| v2.0 | Round 2: schema context and SQL rules | **100%** | **100%** | 4,353 (−12%) | 6.3 s |
 
 ¹ The SQL agent crashed on every question (an invalid `reasoning_effort` setting) until Round 1.
 ² The evaluation framework was built after Round 1.
 
-**Baseline by category:** simple, aggregation and tricky 100%; join 87.5%; date 75%; hard 76.9%. Safety 4/4, routing 8/8.
+| Category | Questions | v1.2 baseline | v2.0 |
+|---|---:|:---:|:---:|
+| simple | 6 | 100% | 100% |
+| aggregation | 12 | 100% | 100% |
+| join | 8 | 87.5% | 100% |
+| date | 4 | 75% | 100% |
+| tricky | 4 | 100% | 100% |
+| hard | 13 | 76.9% | 100% |
 
-**What the baseline failures showed:** a crash on Claude replies that arrive as content blocks, results cut to 10 rows by the prompt, a wrong denominator in a percentage, an unrequested filter, and counting from the wrong group. Round 2 targets each of these with general fixes. Full analysis: [docs/experiments.md](docs/experiments.md).
+Safety stayed at 4/4 (nothing executed) and routing at 8/8 in both versions.
+
+**What changed:** the baseline failures were a crash on Claude replies that arrive as content blocks, results cut to 10 rows by the prompt, a wrong denominator in a percentage, an unrequested filter, and counting from the wrong group. Round 2 fixed all five with general changes: reading replies with `.text`, a compact schema context with allowed values and foreign keys, data notes, and explicit SQL rules. Full analysis: [docs/experiments.md](docs/experiments.md).
+
+**Caveats:** this is one run on questions that were analysed while designing the fixes. A held-out question set and repeated runs are next on the roadmap to confirm the result. Round 2 also made two safety refusals less clear (see [EXP-03 findings](docs/experiments.md#exp-03--schema-context-and-sql-rules)); nothing was executed, but the explanations to the user need work.
 
 ---
 
@@ -322,6 +334,7 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 - [x] Evaluation set with reference SQL and LLM-as-a-judge
 - [x] Schema context: agent tables only, allowed values, foreign keys, data notes
 - [x] SQL rules: row limits, filters, denominators, "has none" questions
+- [ ] Clear, consistent refusals for requests to change data
 - [ ] Self-correcting SQL: retry with the database error
 - [ ] Conversation memory with a LangGraph checkpointer
 - [ ] Held-out evaluation questions
@@ -352,6 +365,7 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 - Generated ETL code is isolated but not fully sandboxed.
 - The router only sees the latest message, so follow-up questions lack context.
 - Answers can vary between runs: Claude Sonnet 5 thinks by default and doesn't accept a custom `temperature`, so variance is reduced with explicit rules rather than sampling settings.
+- Requests to change data are never executed, but the agent's explanation is sometimes unclear (for example, writing a read-only query instead of refusing outright).
 
 ---
 
