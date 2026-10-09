@@ -9,8 +9,12 @@ The read-only PostgreSQL user (agent_reader) is still the final line of
 defence: even if something slips past this check, the database refuses writes.
 """
 
+import re
+
 import sqlglot
 from sqlglot import exp
+
+ANSI_CODES = re.compile(r"\x1b\[[0-9;]*m")
 
 # Statements / clauses that must never appear anywhere in the query,
 # including inside CTEs or subqueries.
@@ -65,8 +69,10 @@ def is_read_only(sql: str) -> tuple[bool, str]:
 
     try:
         statements = [s for s in sqlglot.parse(sql, read="postgres") if s is not None]
-    except sqlglot.errors.ParseError as e:
-        return False, f"The query could not be parsed: {e}"
+    except sqlglot.errors.SqlglotError as e:  # ParseError, TokenError, ... : fail closed
+        # sqlglot adds terminal colour codes and a multi-line excerpt; keep one clean line
+        message = ANSI_CODES.sub("", str(e)).splitlines()[0]
+        return False, f"It isn't a valid SQL query ({message})."
 
     if len(statements) != 1:
         return False, f"Only one statement is allowed, found {len(statements)}."

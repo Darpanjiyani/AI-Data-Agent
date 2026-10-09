@@ -4,9 +4,9 @@ Ask questions about your data in plain English, and let a team of AI agents answ
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue) ![LangGraph](https://img.shields.io/badge/LangGraph-multi--agent-purple) ![Claude](https://img.shields.io/badge/LLM-Claude-orange) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-read--only-336791)
 
-| Execution accuracy (47 questions) | Held-out set (20 unseen questions) | Unsafe requests executed | SQL prompt size |
+| Execution accuracy (47 questions, avg of 3 runs) | Held-out set (20 unseen questions) | Unsafe requests executed | Change requests clearly refused |
 |:---:|:---:|:---:|:---:|
-| **89.4% → 100%** | **100%** | **0 / 7** | **41% smaller** |
+| **89.4% → 99.3%** | **100%** | **0 / 7** | **7 / 7** |
 
 ---
 
@@ -38,7 +38,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 **Highlights**
 - Three independent layers of SQL safety; unsafe requests are never executed.
 - A 59-question evaluation harness with execution accuracy and LLM-as-a-judge scoring.
-- Accuracy raised from 89.4% to 100% on the 47 SQL questions through measured improvement rounds.
+- Accuracy raised from 89.4% to 99.3% (average of 3 runs) on 47 SQL questions, and 100% on 20 held-out questions.
 - Measured, documented improvement rounds: each change is evaluated before and after.
 
 ---
@@ -60,9 +60,11 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
        1. Rewrite question                     Claude picks a tool and
        2. Schema + data notes (cached)         loops until the task is done:
        3. Generate SQL                         • extract_load_tool
-       4. SQL guard + LLM safety judge         • transform_load_tool
-       5. Execute as read-only user              (code runs in an isolated,
-       6. Explain the answer                      time-limited process)
+       4. Change request? → clear refusal      • transform_load_tool
+          SQL guard + LLM safety judge           (code runs in an isolated,
+       5. Execute as read-only user               time-limited process)
+          error? → rewrite and retry (max 2)
+       6. Explain the answer
 ```
 
 | Component | File | Role |
@@ -101,6 +103,8 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 - Gives the model a compact description of the data: columns, the exact allowed values of short text columns, foreign keys, sample rows (with emails and phone numbers hidden) and data notes.
 - Follows explicit rules for row limits, filters, percentages and "has none" questions.
 - Blocks anything that isn't a single read-only query, then runs it as a read-only database user.
+- Refuses requests to change data with a clear explanation instead of attempting them.
+- Recovers from its own mistakes: if a query fails, the database error goes back to Claude, which rewrites the query (up to 2 retries, each re-checked for safety).
 - Returns results with column names and explains them in plain English.
 
 ### ETL Analyst
@@ -234,6 +238,7 @@ The original version relied on one LLM check and ran AI-written code directly. E
 | Risk | Original version | Now |
 |---|---|---|
 | Harmful SQL (DELETE, DROP, ...) | One LLM "judge" decided | **3 layers:** rule-based guard → LLM judge → read-only database user |
+| Requests to change data | Sometimes attempted, sometimes turned into a read query | Clear refusal: "I can only read data..." |
 | Runaway queries | No limit | 15-second statement timeout |
 | AI-generated pandas code | `exec()` inside the app | Separate process, 60-second limit, no API keys or passwords |
 | File access by ETL tools | Any path | Only inside `data/` |
@@ -245,7 +250,9 @@ The original version relied on one LLM check and ran AI-written code directly. E
 2. **LLM judge:** a second opinion on queries that pass the guard.
 3. **Read-only role:** the agent connects as `agent_reader` (SELECT only, read-only transactions, 15-second timeout). Even a query that got past both checks couldn't change anything.
 
-In the evaluation, all 4 unsafe requests (delete, update, drop, and "show then delete") were stopped by the guard, and table row counts were unchanged.
+In the evaluations, none of the 7 unsafe requests (delete, update, drop, create table, and "show then delete") was executed, and table row counts never changed. The eval also checks that each one gets a **clear refusal**, not just that nothing ran.
+
+The guard fails closed: anything it can't parse, including a prose reply instead of SQL, is blocked.
 
 ### ETL: isolation, not a full sandbox
 Generated code runs in a separate Python process, so it can't crash or freeze the app and can't read your secrets. It can still read and write files your user account can access; running it in a container is on the [roadmap](#8-roadmap).
@@ -292,7 +299,7 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 - The eval is only changed when an answer key or a question's wording is wrong, never to raise the score.
 - Agent improvements must be general (better context, clearer rules), not special cases for these questions.
 - The main set was used to find and fix failures, so the held-out score is the better estimate of accuracy on new questions.
-- The LLM judge can be wrong too (1 wrong verdict in 67 so far), so deterministic execution accuracy is the primary metric.
+- The LLM judge can be wrong too (1 wrong verdict in 228 so far, and none in 161 since it was changed to reason before deciding), so deterministic execution accuracy is the primary metric.
 
 ---
 
@@ -305,26 +312,31 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 | v1.2 | Evaluation baseline (47 SQL questions) | **89.4%** | **89.4%** | 4,959 | 6.5 s |
 | v2.0 | Round 2: schema context and SQL rules | **100%** | **100%** | 4,353 (−12%) | 6.3 s |
 | v2.0 | Same version on the **held-out set** (20 unseen questions) | **100%**³ | 95%⁴ | 4,335 | 5.5 s |
+| v2.1 | Round 3: clear refusals and self-correcting SQL | **99.3%**⁵ | **99.3%**⁵ | 4,432 (+2%) | 5.6 s |
+| v2.1 | Same version on the **held-out set** | **100%** | **100%** | 4,413 | 5.6 s |
 
 ¹ The SQL agent crashed on every question (an invalid `reasoning_effort` setting) until Round 1.
 ² The evaluation framework was built after Round 1.
 ³ 95% as first scored; the one miss was a scoring bug (a date vs a midnight timestamp for the same month), fixed and re-scored.
 ⁴ The one "incorrect" verdict was a judge error: its reasoning found every value correct. The judge now reasons before deciding.
+⁵ Average of 3 runs (100%, 100%, 97.9%). The one miss was a single question in one run (see [EXP-05](docs/experiments.md#exp-05--clear-refusals-and-self-correction)).
 
-| Category | Questions | v1.2 baseline | v2.0 |
-|---|---:|:---:|:---:|
-| simple | 6 | 100% | 100% |
-| aggregation | 12 | 100% | 100% |
-| join | 8 | 87.5% | 100% |
-| date | 4 | 75% | 100% |
-| tricky | 4 | 100% | 100% |
-| hard | 13 | 76.9% | 100% |
+| Category | Questions | v1.2 baseline | v2.0 | v2.1 (3-run avg) |
+|---|---:|:---:|:---:|:---:|
+| simple | 6 | 100% | 100% | 100% |
+| aggregation | 12 | 100% | 100% | 100% |
+| join | 8 | 87.5% | 100% | 100% |
+| date | 4 | 75% | 100% | 100% |
+| tricky | 4 | 100% | 100% | 100% |
+| hard | 13 | 76.9% | 100% | 97.4% |
 
-Safety stayed at 4/4 (nothing executed) and routing at 8/8 in both versions.
+Safety stayed at 4/4 (nothing executed) and routing at 8/8 in every version. Clear refusals went from 2/4 in v2.0 to 4/4 in all three v2.1 runs (and 3/3 on the held-out set).
 
 **What changed:** the baseline failures were a crash on Claude replies that arrive as content blocks, results cut to 10 rows by the prompt, a wrong denominator in a percentage, an unrequested filter, and counting from the wrong group. Round 2 fixed all five with general changes: reading replies with `.text`, a compact schema context with allowed values and foreign keys, data notes, and explicit SQL rules. Full analysis: [docs/experiments.md](docs/experiments.md).
 
-**Caveats:** the main-set result is one run on questions that were analysed while designing the fixes. The held-out set (written before Round 3, never used to design fixes) confirms the gains generalise; repeated runs are next. Round 2 also made two safety refusals less clear (see [EXP-03 findings](docs/experiments.md#exp-03--schema-context-and-sql-rules)); nothing was executed, but the explanations to the user need work.
+**Round 3:** change requests are now recognised before any SQL is written and get a clear, consistent refusal, and a query that fails with a database error is rewritten and retried (up to 2 times, re-checked for safety each time). The extra rule added about 2% input tokens.
+
+**Caveats:** the main set was used while designing fixes, so the held-out set is the better estimate for new questions. Results vary a little between runs (1 miss in 141 question runs), which is why v2.1 is reported as an average of 3. The retry loop never fired in these runs, since no query hit a database error, so so far it's only tested offline. It also can't catch a query that runs but returns the wrong shape, which is what caused the one miss.
 
 ---
 
@@ -342,11 +354,12 @@ Safety stayed at 4/4 (nothing executed) and routing at 8/8 in both versions.
 - [x] Evaluation set with reference SQL and LLM-as-a-judge
 - [x] Schema context: agent tables only, allowed values, foreign keys, data notes
 - [x] SQL rules: row limits, filters, denominators, "has none" questions
-- [ ] Clear, consistent refusals for requests to change data
-- [ ] Self-correcting SQL: retry with the database error
+- [x] Clear, consistent refusals for requests to change data
+- [x] Self-correcting SQL: retry with the database error
 - [ ] Conversation memory with a LangGraph checkpointer
 - [x] Held-out evaluation questions
-- [ ] Repeated eval runs to measure run-to-run variance
+- [x] Repeated eval runs to measure run-to-run variance
+- [ ] Result sanity checks (e.g. a "how many" question should return one row)
 
 **Cost and speed**
 - [x] Schema built once per process; SQL prompt 41% smaller
@@ -373,7 +386,8 @@ Safety stayed at 4/4 (nothing executed) and routing at 8/8 in both versions.
 - Generated ETL code is isolated but not fully sandboxed.
 - The router only sees the latest message, so follow-up questions lack context.
 - Answers can vary between runs: Claude Sonnet 5 thinks by default and doesn't accept a custom `temperature`, so variance is reduced with explicit rules rather than sampling settings.
-- Requests to change data are never executed, but the agent's explanation is sometimes unclear (for example, writing a read-only query instead of refusing outright).
+- Self-correction only catches queries that fail; a query that runs but answers the wrong question isn't caught yet.
+- A request that mixes reading and changing data ("show the cancelled rides, then delete them") is refused as a whole, rather than answering only the read part.
 
 ---
 

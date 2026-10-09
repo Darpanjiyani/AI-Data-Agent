@@ -8,10 +8,11 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 | [EXP-02](#exp-02--evaluation-framework-and-baseline) | 2026-10-08 | Evaluation framework and baseline | **89.4%** (42/47) | **89.4%** | 4,959 |
 | [EXP-03](#exp-03--schema-context-and-sql-rules) | 2026-10-08 | Schema context and SQL rules | **100%** (47/47) | **100%** | 4,353 |
 | [EXP-04](#exp-04--held-out-evaluation) | 2026-10-09 | Held-out evaluation (20 unseen questions) | **100%** (20/20)¹ | 95%² | 4,335 |
-| [EXP-05](#exp-05--clear-refusals-and-self-correction) | planned | Clear refusals and self-correcting SQL | – | – | – |
+| [EXP-05](#exp-05--clear-refusals-and-self-correction) | 2026-10-09 | Clear refusals and self-correcting SQL | **99.3%** (3-run avg)³; held-out **100%** | **99.3%** | 4,432 |
 
 ¹ 95% as first scored; the one miss was a scoring bug (date vs midnight timestamp), fixed and re-scored.
 ² The one "incorrect" verdict was a judge error; its own reasoning found every value correct.
+³ Main set run 3 times: 100%, 100% and 97.9% (140/141 question runs correct).
 
 ---
 
@@ -217,17 +218,68 @@ These are fixes to the answer key and the scorer, which the rules allow; no agen
 
 ## EXP-05 – Clear refusals and self-correction
 
-**Status:** planned.
-
 **Goal:** fix the refusal issue found in EXP-03 and let the agent recover from SQL errors.
 
-**Planned changes**
-- A dedicated path for requests to change data: the agent replies clearly that it can only read data, instead of turning the request into a read query.
-- Clean guard error messages (no terminal colour codes).
-- A "clear refusal" check in the eval, so safety measures how requests are handled, not only that nothing ran.
-- Self-correcting SQL: if a query fails, send the database error back to Claude to fix it (up to 2 retries).
+**Changes**
 
-**Measurement:** main set (3 runs, average and range) and the held-out set once.
+| # | Change | File | Targets |
+|---|---|---|---|
+| 1 | New SQL rule: for requests to add, change or delete data, or to create, alter or drop tables, reply with the marker `WRITE_REQUEST` instead of SQL | `agents/sql_analyst.py` | Change requests turned into read queries (EXP-03) |
+| 2 | Clear, user-facing refusal messages, by reason: change request, guard, or LLM judge | `agents/sql_analyst.py` | Confusing explanations (EXP-03) |
+| 3 | Guard error messages cleaned: one line, no terminal colour codes | `utils/sql_guard.py` | Garbled message (EXP-03) |
+| 4 | Self-correction: on a database error, Claude gets the failed query and the error and rewrites it, up to 2 retries; every rewrite goes through the safety checks again | `agents/sql_analyst.py`, `Models/schema.py` | Recoverable SQL errors |
+| 5 | Eval: safety now reports "clearly refused" as well as "not executed"; SQL results report retries and recoveries | `evals/run_eval.py` | Measuring the above |
+
+**Bug found while testing**
+
+The SQL guard crashed instead of blocking when a reply contained an unbalanced quote (for example prose like *"I can't do that"*): `sqlglot` raises a `TokenError`, which wasn't caught. The guard now catches every `sqlglot` error and **fails closed**. The guard test suite grew to 25 cases, all passing.
+
+**Offline checks (stand-in model)**
+- All 7 change requests (main and held-out) are clearly refused, both when the model returns the marker and when it writes a `DELETE`/`DROP` that the guard catches.
+- A query using a non-existent table gets the database error, is rewritten and recovers; a query that keeps failing stops after exactly 2 retries.
+- Main set 47/47 and held-out set 20/20 with a correct stand-in, so the new rule doesn't refuse normal questions in these runs.
+
+**Trade-off:** a request that mixes reading and changing data ("show the cancelled rides, then delete them") is now refused as a whole. In EXP-03 the agent showed the rides and declined the delete, which was arguably more helpful; consistency and safety were preferred here.
+
+**Results** (2026-10-09: main set run 3 times, held-out set run once)
+
+| Metric | EXP-03 (main, 1 run) | EXP-05 main (3 runs) | EXP-05 held-out |
+|---|:---:|:---:|:---:|
+| Execution accuracy | 100% | **99.3%** avg (100%, 100%, 97.9%) | **100%** (20/20) |
+| Answer accuracy (LLM judge) | 100% | **99.3%** avg (100%, 100%, 97.9%) | **100%** (20/20) |
+| Unsafe requests not executed | 4/4 | 4/4 in every run | 3/3 |
+| Clearly refused | 2/4 | **4/4 in every run** | **3/3** |
+| Questions that needed a retry | – | 0 of 141 | 0 of 20 |
+| Routing | 8/8 | 8/8 in every run | 4/4 |
+| Input tokens / question | 4,353 | 4,432 (+1.8%) | 4,413 |
+| Output tokens / question | – | 376 | 364 |
+| Time / question | 6.3 s | 5.6 s | 5.6 s |
+| Database unchanged | yes | yes | yes |
+
+By category (main set, average of 3 runs): simple, aggregation, join, date and tricky 100%; hard 97.4% (one miss in 39 question runs).
+
+**The one failure: h06, in 1 of 3 runs**
+
+*"How many users have had both a failed payment and a refunded payment?"* (expected 56)
+
+```sql
+SELECT COUNT(DISTINCT user_id) AS users_with_failed_and_refunded
+FROM payments
+WHERE payment_status IN ('failed', 'refunded')
+GROUP BY user_id
+HAVING COUNT(DISTINCT payment_status) = 2;
+```
+
+The filtering logic is right, but the `COUNT` sits in the same query as `GROUP BY user_id`, so it returns 56 rows that each say `1` instead of one row that says `56`. The correct form counts the groups in an outer query. The final answer then misread the 56 rows and said 57. The other two runs wrote the query correctly.
+
+**Findings**
+1. **Refusals are fixed:** every change request (7 different ones, 15 attempts across all runs) was refused with a clear message, up from 2/4 in EXP-03. Nothing was executed and row counts never changed.
+2. **Accuracy held, and the held-out set needed no scoring fixes this time:** 20/20 on the first scoring.
+3. **Run-to-run variance is real but small:** 1 miss in 141 question runs. A single run would have reported either 100% or 97.9%; the average of 3 (99.3%) is the honest number.
+4. **Self-correction never fired:** no generated query hit a database error in 161 question runs, so the retry loop is a safety net that is so far only tested offline. It also wouldn't have helped h06: that query *ran*, it just returned the wrong shape. Retries catch errors, not wrong answers.
+5. **Cost:** the extra refusal rule added about 80 input tokens per question (+1.8%). Time per question was lower (5.6 s vs 6.3 s), but latency depends on API load, so this isn't attributed to the change.
+
+**Not changed after this experiment:** h06 failed once in three runs. Adding a rule written to fix that one query would be tuning to the eval. A general fix (checking that a "how many" question returns a single row, and rewriting if not) is on the roadmap, to be measured on both the main and held-out sets.
 
 ---
 

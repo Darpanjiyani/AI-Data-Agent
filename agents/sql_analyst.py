@@ -21,6 +21,13 @@ def clean_sql(text: str) -> str:
         text = match.group(1)
     return text.strip()
 
+# The SQL step replies with this marker instead of SQL when asked to change data
+WRITE_REQUEST_MARKER = "WRITE_REQUEST"
+
+# How many times the agent may rewrite a query after a database error
+MAX_SQL_RETRIES = 2
+
+
 @lru_cache(maxsize=1)
 def get_schema_context() -> str:
     """
@@ -83,6 +90,9 @@ Rules:
    rides), start from the table that lists all of them and use NOT EXISTS or a LEFT JOIN.
 6. Give computed columns clear names with AS.
 7. Return only the SQL query, with no explanation, because it will be executed directly.
+8. This agent can only read data. If the user asks to add, change or delete data, or to
+   create, alter or drop tables (even as part of a larger request), don't write SQL:
+   reply with exactly {WRITE_REQUEST_MARKER}
 
 Data notes:
 {DATA_NOTES}
@@ -110,11 +120,16 @@ def is_safe_sql(state: AgentSchema) -> AgentSchema:
 
     sql_query = state.generated_sql_query
 
+    # Step 0: the SQL step recognised a request to change data and wrote no SQL.
+    if sql_query.strip().strip("`.").upper() == WRITE_REQUEST_MARKER:
+        return {"is_safe": "No", "refusal_type": "write_request",
+                "comments": "The request asks to change data, and this agent can only read data."}
+
     # Step 1: rule-based check. Instant, free and always gives the same answer.
     # If it fails, the query is rejected without calling the LLM judge.
     allowed, reason = is_read_only(sql_query)
     if not allowed:
-        return {"is_safe": "No", "comments": f"Blocked by the SQL guard: {reason}"}
+        return {"is_safe": "No", "refusal_type": "guard", "comments": f"Blocked by the SQL guard: {reason}"}
 
     # Step 2: LLM judge as a second opinion.
     llm = pick_llm("medium")
@@ -129,15 +144,33 @@ def is_safe_sql(state: AgentSchema) -> AgentSchema:
     {sql_query} """
 
     response = llm_judge.invoke(prompt).model_dump()
-    return {"is_safe": response['answer'], "comments": response['comments']}
+    refusal_type = "" if response['answer'] == "Yes" else "judge"
+    return {"is_safe": response['answer'], "comments": response['comments'], "refusal_type": refusal_type}
 
 
 #canceled SQL Query Node
 def canceled_sql(state: AgentSchema) -> AgentSchema:
 
-    comments = state.comments
+    comments = state.comments.removeprefix("Blocked by the SQL guard: ")
 
-    final_answer = f"The generated SQL query was deemed unsafe to execute. Reason: {comments}. Therefore, the SQL query will not be executed."
+    if state.refusal_type == "write_request":
+        final_answer = (
+            "I can only read data, so I can't make changes to the database, such as adding, "
+            "updating or deleting records, or creating or dropping tables. I can help you look "
+            "at the data instead, for example by listing the records you wanted to change."
+        )
+    elif state.refusal_type == "guard" and "isn't a valid SQL query" in comments:
+        final_answer = (
+            "I couldn't turn this request into a valid read-only query, so nothing was run. "
+            "Try asking it as a question about the data."
+        )
+    elif state.refusal_type == "guard":
+        final_answer = (
+            f"I didn't run this request because the query I wrote didn't pass the safety check: {comments} "
+            "Try asking it as a question about the data."
+        )
+    else:
+        final_answer = f"I didn't run this request because the safety review flagged the query: {comments}"
 
     return {"final_answer": final_answer, "messages": [AIMessage(content=final_answer)]}
 
@@ -151,6 +184,29 @@ def execute_sql(state: AgentSchema) -> AgentSchema:
 
     execution_result = obj.execute_query(sql_query)
     return {"sql_query_execution_result": execution_result}
+
+# Fix SQL Node: called when the query failed with a database error
+def fix_sql(state: AgentSchema) -> AgentSchema:
+
+    llm = pick_llm("medium")
+
+    prompt = f"""{state.prompt_query_context}
+
+Your previous query failed when it ran on the database.
+
+Previous query:
+{state.generated_sql_query}
+
+Database error:
+{state.sql_query_execution_result}
+
+Write a corrected query that answers the same question. Follow all the rules above.
+Return only the SQL query.
+"""
+    corrected_sql = llm.invoke(prompt).text
+
+    return {"generated_sql_query": clean_sql(corrected_sql), "retry_count": state.retry_count + 1}
+
 
 # Represent the final answer Node
 def represent_final_answer(state: AgentSchema) -> AgentSchema:
@@ -188,6 +244,7 @@ sql_agent_graph.add_node(generate_sql,name="generate_sql")
 sql_agent_graph.add_node(is_safe_sql,name="is_safe_sql")
 sql_agent_graph.add_node(canceled_sql,name="canceled_sql")
 sql_agent_graph.add_node(execute_sql,name="execute_sql")
+sql_agent_graph.add_node(fix_sql,name="fix_sql")
 sql_agent_graph.add_node(represent_final_answer,name="represent_final_answer")
 
 # Edges
@@ -215,8 +272,22 @@ sql_agent_graph.add_conditional_edges("is_safe_sql", is_safe_sql_edge,
 # sql_agent_graph.add_edge("is_safe_sql", "execute_sql")
 # sql_agent_graph.add_edge("is_safe_sql", "canceled_sql")
 
+# Self-correction: if the query failed with a database error, rewrite it (up to
+# MAX_SQL_RETRIES times). The rewritten query goes through the safety checks again.
+def after_execute_edge(state: AgentSchema) -> str:
+    failed = state.sql_query_execution_result.startswith("Error executing query")
+    if failed and state.retry_count < MAX_SQL_RETRIES:
+        return "fix_sql"
+    return "represent_final_answer"
+
+sql_agent_graph.add_conditional_edges("execute_sql", after_execute_edge,
+                                      {
+                                          "fix_sql": "fix_sql",
+                                          "represent_final_answer": "represent_final_answer"
+                                      })
+sql_agent_graph.add_edge("fix_sql", "is_safe_sql")
+
 sql_agent_graph.add_edge("canceled_sql", END)
-sql_agent_graph.add_edge("execute_sql", "represent_final_answer")
 sql_agent_graph.add_edge("represent_final_answer", END)
 
 # Compile the Graph
