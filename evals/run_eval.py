@@ -17,6 +17,7 @@ Markdown report in evals/results/.
 Usage (from the project root):
   uv run evals/run_eval.py                    # full run
   uv run evals/run_eval.py --limit 5          # first 5 questions of each type
+  uv run evals/run_eval.py --set holdout      # held-out questions (generalisation check)
   uv run evals/run_eval.py --ids s01 j07      # specific questions
   uv run evals/run_eval.py --category join    # one category
   uv run evals/run_eval.py --no-judge         # skip the LLM judge (cheaper)
@@ -29,6 +30,7 @@ import json
 import time
 import argparse
 import itertools
+import re
 from collections import Counter
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -47,7 +49,11 @@ from utils.database import DatabaseUtil, reader_connection_details
 from utils.sql_guard import is_read_only
 from utils.llm_pick import pick_llm
 
-QUESTIONS_FILE = PROJECT_ROOT / "evals" / "questions.json"
+QUESTION_SETS = {
+    "main": PROJECT_ROOT / "evals" / "questions.json",
+    # Held-out set: only for checking that improvements generalise. Never use it to design fixes.
+    "holdout": PROJECT_ROOT / "evals" / "holdout_questions.json",
+}
 RESULTS_DIR = PROJECT_ROOT / "evals" / "results"
 TABLES_TO_WATCH = ["users", "vehicles", "rides", "payments", "ratings"]
 
@@ -56,13 +62,20 @@ TABLES_TO_WATCH = ["users", "vehicles", "rides", "payments", "ratings"]
 #  Comparing query results                                                     #
 # --------------------------------------------------------------------------- #
 
+MIDNIGHT_TIMESTAMP = re.compile(r"^(\d{4}-\d{2}-\d{2})[ T]00:00:00(\.0+)?$")
+
+
 def normalize_value(value):
     """
     Make values comparable: numbers (including numeric text like "64.57")
-    are rounded to 2 decimals, text is lower-cased and trimmed.
+    are rounded to 2 decimals, a midnight timestamp equals its date
+    ("2025-02-01 00:00:00" == "2025-02-01"), and text is lower-cased and trimmed.
     """
     if value is None or isinstance(value, bool):
         return value
+    midnight = MIDNIGHT_TIMESTAMP.match(str(value).strip())
+    if midnight:
+        return midnight.group(1)
     try:
         number = Decimal(str(value).strip())
         if not number.is_finite():
@@ -151,8 +164,11 @@ def results_match(agent_rows, reference_rows, order_matters: bool = False, top: 
 # --------------------------------------------------------------------------- #
 
 class AnswerJudgement(BaseModel):
+    # The reason comes first so the judge works through the comparison before
+    # giving its verdict (in one held-out run, a verdict-first judge said
+    # "incorrect" while its own reasoning concluded every value matched).
+    reason: str = Field(..., description="Compare the answer with the correct result step by step, in a few sentences.")
     correct: bool = Field(..., description="True if the agent's answer correctly answers the question.")
-    reason: str = Field(..., description="One or two sentences explaining the decision.")
 
 
 JUDGE_PROMPT = """You are grading an AI data analyst's answer to a question about a database.
@@ -241,6 +257,8 @@ def pct(part, whole):
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate the AI Data Agent.")
+    parser.add_argument("--set", choices=sorted(QUESTION_SETS), default="main",
+                        help="Which question set to run: main (default) or holdout.")
     parser.add_argument("--limit", type=int, help="Only run the first N questions of each type.")
     parser.add_argument("--ids", nargs="+", help="Only run these question ids.")
     parser.add_argument("--category", help="Only run questions in this category (simple, aggregation, join, date, tricky, safety, routing).")
@@ -249,7 +267,7 @@ def main():
     parser.add_argument("--skip-routing", action="store_true", help="Skip the routing questions.")
     args = parser.parse_args()
 
-    questions = json.loads(QUESTIONS_FILE.read_text(encoding="utf-8"))
+    questions = json.loads(QUESTION_SETS[args.set].read_text(encoding="utf-8"))
     sql_questions = questions["sql_questions"]
     safety_questions = [] if args.skip_safety else questions["safety_questions"]
     routing_questions = [] if args.skip_routing else questions["routing_questions"]
@@ -277,6 +295,7 @@ def main():
     counts_before = table_counts(db)
     report = {
         "run_at": datetime.now().isoformat(timespec="seconds"),
+        "question_set": args.set,
         "options": vars(args),
         "sql": [], "safety": [], "routing": [],
     }
@@ -379,8 +398,8 @@ def main():
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    json_path = RESULTS_DIR / f"eval_{stamp}.json"
-    md_path = RESULTS_DIR / f"eval_{stamp}.md"
+    json_path = RESULTS_DIR / f"eval_{args.set}_{stamp}.json"
+    md_path = RESULTS_DIR / f"eval_{args.set}_{stamp}.md"
     json_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     md_path.write_text(build_markdown(report, judge is not None), encoding="utf-8")
 
@@ -437,7 +456,7 @@ def build_summary(report, judged: bool) -> dict:
 
 def build_markdown(report, judged: bool) -> str:
     s = report["summary"]
-    md = [f"# Evaluation report", "", f"Run at {report['run_at']}", "", "## Summary", ""]
+    md = [f"# Evaluation report ({report['question_set']} set)", "", f"Run at {report['run_at']}", "", "## Summary", ""]
     md += [f"- {line}" for line in s["lines"]]
 
     if s.get("by_category"):

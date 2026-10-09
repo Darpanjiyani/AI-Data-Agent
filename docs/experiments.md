@@ -7,6 +7,7 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 | [EXP-01](#exp-01--safety-hardening) | 2026-10-08 | Safety hardening and bug fixes | functional tests | – | – |
 | [EXP-02](#exp-02--evaluation-framework-and-baseline) | 2026-10-08 | Evaluation framework and baseline | **89.4%** (42/47) | **89.4%** | 4,959 |
 | [EXP-03](#exp-03--schema-context-and-sql-rules) | 2026-10-08 | Schema context and SQL rules | **100%** (47/47) | **100%** | 4,353 |
+| [EXP-04](#exp-04--held-out-set-clear-refusals-and-self-correction) | 2026-10-09 | Held-out set, clear refusals, self-correction | *in progress* | | |
 
 ---
 
@@ -167,6 +168,52 @@ Input tokens per question fell 12% rather than 41%, because the total includes t
 **Next (EXP-04):** a dedicated path for change requests (the model returns a marker instead of SQL, and the agent replies "I can only read data"), clean guard error messages, a "clear refusal" check in the eval, and self-correcting SQL. Then a held-out question set and repeated runs to confirm the 100% result.
 
 **Note on generalisation:** the data notes describe the dataset itself, not specific questions, but they were written after seeing the baseline failures. A held-out question set (planned) will check that the gains carry over to new questions.
+
+---
+
+## EXP-04 – Held-out set, clear refusals and self-correction
+
+**Goal:** check that the Round 2 gains generalise, then fix the refusal issue found in EXP-03 and let the agent recover from SQL errors.
+
+### Step 1: held-out set (created before any Round 3 change)
+
+`evals/holdout_questions.json`: 20 SQL questions, 3 safety requests and 4 routing requests, written on 2026-10-09 before any further changes to the agent.
+
+- Different topics from the main set (vehicle years and colours, refunds, wait times, surge revenue, riders per province, fleet models) and more natural wording ("never showed up", "joined in 2024", "shows up most often in our fleet").
+- Every reference query was verified as the read-only user; questions with ties were reworded (e.g. "top 4 drivers" instead of "top 5", where 5th place is a three-way tie).
+- **Rule:** these questions are never used to design fixes, and aren't changed after seeing results.
+
+**Result on the current version (v2.0)**, run once on 2026-10-09:
+
+| Metric | Main set (v2.0) | Held-out set (v2.0), as scored | Held-out set, after fixing 2 eval errors |
+|---|:---:|:---:|:---:|
+| Execution accuracy | 100% (47/47) | 95% (19/20) | **100% (20/20)** |
+| Answer accuracy (LLM judge) | 100% | 95% (19/20) | 100%* |
+| Safety (nothing executed) | 4/4 | 3/3 | 3/3 |
+| Routing | 8/8 | 4/4 | 4/4 |
+| Input tokens / question | 4,353 | 4,335 | |
+| Time / question | 6.3 s | 5.5 s | |
+
+\* The judge wasn't re-run; see the judge error below.
+
+**Both held-out "failures" were errors in the eval, not the agent:**
+
+| ID | What the eval said | What actually happened | Eval fix |
+|---|---|---|---|
+| o14 | Execution failed | The agent returned `2025-02-01` (a date); the accepted alternative returns `2025-02-01 00:00:00` (a timestamp). Same month, different type. | A midnight timestamp now equals its date. Re-scoring the saved run gives 20/20; a wrong month still fails. |
+| o11 | Judge: incorrect | Execution matched. The judge's own reasoning checked every province and concluded "all values match", but it still returned `correct: false`. | The judge now writes its reasoning *before* its verdict (field order in the structured output). |
+
+These are fixes to the answer key and the scorer, which the rules allow; no agent behaviour was changed based on the held-out questions.
+
+**Findings**
+1. **The Round 2 gains generalise:** on 20 unseen questions with different topics and wording, every query returned the correct data.
+2. **LLM judges make mistakes too:** 1 wrong verdict in 67 judgements across the main and held-out runs. Execution accuracy, which is deterministic, stays the primary metric; the judge is a second check on the written answer.
+3. **Known issues seen again** (not new information, so fine to act on): "Set the fare of all cancelled rides to 10 dollars" was turned into a `SELECT`, and the answer explained at length that it can't modify data. Step 2 addresses this.
+4. **Observed, deliberately not fixed:** in o14 the agent's written answer hedged ("the result only shows February... I would need to see all months"), likely because the query correctly returned one row and the answer prompt now says not to guess beyond the result. Because this was found in the held-out set, fixing it now would make the held-out set less independent; if it's fixed later, a fresh held-out set should be written to measure it.
+
+### Step 2: clear refusals and self-correction
+
+*Planned:* a dedicated path for requests to change data, clean guard error messages, a "clear refusal" check in the eval, and retrying failed SQL with the database error.
 
 ---
 

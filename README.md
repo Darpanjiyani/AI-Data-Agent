@@ -4,9 +4,9 @@ Ask questions about your data in plain English, and let a team of AI agents answ
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue) ![LangGraph](https://img.shields.io/badge/LangGraph-multi--agent-purple) ![Claude](https://img.shields.io/badge/LLM-Claude-orange) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-read--only-336791)
 
-| Execution accuracy (47 questions) | Hard questions | Unsafe requests executed | SQL prompt size |
+| Execution accuracy (47 questions) | Held-out set (20 unseen questions) | Unsafe requests executed | SQL prompt size |
 |:---:|:---:|:---:|:---:|
-| **89.4% → 100%** | **76.9% → 100%** | **0 / 4** | **41% smaller** |
+| **89.4% → 100%** | **100%** | **0 / 7** | **41% smaller** |
 
 ---
 
@@ -280,14 +280,19 @@ uv run evals/run_eval.py --limit 5           # quick check
 uv run evals/run_eval.py --category hard     # one category
 uv run evals/run_eval.py --ids s01 t01       # specific questions
 uv run evals/run_eval.py --no-judge          # skip the LLM judge (cheaper)
+uv run evals/run_eval.py --set holdout       # held-out questions (see below)
 ```
 
 Each run writes a Markdown report (summary, per-question results, and every failure with its generated SQL) and a JSON file to `evals/results/`.
 
+### Held-out set
+`evals/holdout_questions.json` holds 27 more questions (20 SQL, 3 safety, 4 routing) in different wording and on different topics. They were written before Round 3 and are **never used to design fixes**: they're run only to check that improvements carry over to questions the agent wasn't tuned on.
+
 ### Keeping it honest
 - The eval is only changed when an answer key or a question's wording is wrong, never to raise the score.
 - Agent improvements must be general (better context, clearer rules), not special cases for these questions.
-- Limitation: the score reflects these 59 questions. A held-out set is planned to confirm improvements generalise.
+- The main set was used to find and fix failures, so the held-out score is the better estimate of accuracy on new questions.
+- The LLM judge can be wrong too (1 wrong verdict in 67 so far), so deterministic execution accuracy is the primary metric.
 
 ---
 
@@ -299,9 +304,12 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 | v1.1 | Round 1: safety hardening and bug fixes | not measured² | – | – | – |
 | v1.2 | Evaluation baseline (47 SQL questions) | **89.4%** | **89.4%** | 4,959 | 6.5 s |
 | v2.0 | Round 2: schema context and SQL rules | **100%** | **100%** | 4,353 (−12%) | 6.3 s |
+| v2.0 | Same version on the **held-out set** (20 unseen questions) | **100%**³ | 95%⁴ | 4,335 | 5.5 s |
 
 ¹ The SQL agent crashed on every question (an invalid `reasoning_effort` setting) until Round 1.
 ² The evaluation framework was built after Round 1.
+³ 95% as first scored; the one miss was a scoring bug (a date vs a midnight timestamp for the same month), fixed and re-scored.
+⁴ The one "incorrect" verdict was a judge error: its reasoning found every value correct. The judge now reasons before deciding.
 
 | Category | Questions | v1.2 baseline | v2.0 |
 |---|---:|:---:|:---:|
@@ -316,7 +324,7 @@ Safety stayed at 4/4 (nothing executed) and routing at 8/8 in both versions.
 
 **What changed:** the baseline failures were a crash on Claude replies that arrive as content blocks, results cut to 10 rows by the prompt, a wrong denominator in a percentage, an unrequested filter, and counting from the wrong group. Round 2 fixed all five with general changes: reading replies with `.text`, a compact schema context with allowed values and foreign keys, data notes, and explicit SQL rules. Full analysis: [docs/experiments.md](docs/experiments.md).
 
-**Caveats:** this is one run on questions that were analysed while designing the fixes. A held-out question set and repeated runs are next on the roadmap to confirm the result. Round 2 also made two safety refusals less clear (see [EXP-03 findings](docs/experiments.md#exp-03--schema-context-and-sql-rules)); nothing was executed, but the explanations to the user need work.
+**Caveats:** the main-set result is one run on questions that were analysed while designing the fixes. The held-out set (written before Round 3, never used to design fixes) confirms the gains generalise; repeated runs are next. Round 2 also made two safety refusals less clear (see [EXP-03 findings](docs/experiments.md#exp-03--schema-context-and-sql-rules)); nothing was executed, but the explanations to the user need work.
 
 ---
 
@@ -337,7 +345,7 @@ Safety stayed at 4/4 (nothing executed) and routing at 8/8 in both versions.
 - [ ] Clear, consistent refusals for requests to change data
 - [ ] Self-correcting SQL: retry with the database error
 - [ ] Conversation memory with a LangGraph checkpointer
-- [ ] Held-out evaluation questions
+- [x] Held-out evaluation questions
 - [ ] Repeated eval runs to measure run-to-run variance
 
 **Cost and speed**
@@ -388,6 +396,7 @@ AI-Data-Agent/
 │   └── llm_pick.py          # Model per step
 ├── evals/
 │   ├── questions.json       # Evaluation questions with reference SQL
+│   ├── holdout_questions.json  # Held-out questions, never used to design fixes
 │   ├── run_eval.py          # Scores the agent and writes reports
 │   └── results/             # Reports from each run
 ├── docs/
