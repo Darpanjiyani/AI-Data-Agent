@@ -1,9 +1,6 @@
 # LLM_Pick is basically the class that we will build, low end LLM, High end LLM, so we need to make sure the exact and quick switch between these LLMs. So that 
 # we don't need to hardcode anything.
 
-# LLM_Pick is basically the class that we will build, low end LLM, High end LLM, so we need to make sure the exact and quick switch between these LLMs. So that 
-# we don't need to hardcode anything.
-
 from langchain_anthropic import ChatAnthropic
 from dotenv import load_dotenv
 load_dotenv()  # Load environment variables from .env file
@@ -25,7 +22,9 @@ def pick_llm(level: str):
     elif level.lower() == "medium":
         llm = ChatAnthropic(model="claude-sonnet-5")
     elif level.lower() == "high":
-        llm = ChatAnthropic(model="claude-opus-5", temperature = 0)
+        # Claude Opus 5 and Sonnet 5 reject non-default temperature values (400 error),
+        # so temperature is only set for Haiku.
+        llm = ChatAnthropic(model="claude-opus-5")
     elif level.lower() == "claude":
         llm = ChatAnthropic(model_name="claude-sonnet-5")
     else:

@@ -93,7 +93,8 @@ def transform_load_tool(input_file_path:str,output_folder:str,output_format:str,
 
         """
 
-    response = llm.invoke(prompt).content
+    # .text works whether Claude replies with plain text or a list of content blocks
+    response = llm.invoke(prompt).text
 
     # Remove a ```python ... ``` code fence if the model added one
     pandas_code = clean_code(response)

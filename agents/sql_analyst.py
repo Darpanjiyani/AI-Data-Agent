@@ -6,6 +6,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.llm_pick import pick_llm
 from utils.database import DatabaseUtil, reader_connection_details
 from utils.sql_guard import is_read_only
+from utils.schema_notes import AGENT_TABLES, DATA_NOTES
+from functools import lru_cache
 from Models.schema import AgentSchema, JudgeSchema
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
@@ -18,6 +20,18 @@ def clean_sql(text: str) -> str:
     if match:
         text = match.group(1)
     return text.strip()
+
+@lru_cache(maxsize=1)
+def get_schema_context() -> str:
+    """
+    Describe the agent's tables once per process and reuse it for every question,
+    instead of querying the database schema on every request.
+    """
+    db = DatabaseUtil(reader_connection_details())
+    schema_info = db.schema_details("public", tables=AGENT_TABLES)
+    if schema_info.startswith("Error"):
+        get_schema_context.cache_clear()  # don't cache a failed attempt
+    return schema_info
 
 # ---------------------------- AI Agent Code -----------------------------------------------
 
@@ -36,7 +50,8 @@ def curate_ques(state: AgentSchema) -> AgentSchema:
     Question: {user_question}
     """
 
-    response = llm.invoke(prompt).content.strip()
+    # .text works whether Claude replies with plain text or a list of content blocks
+    response = llm.invoke(prompt).text.strip()
 
     # Return only the fields this step changed. Returning the whole state would
     # make LangGraph add the existing messages again (the list uses an `add` reducer).
@@ -47,29 +62,35 @@ def prompt_query_context(state: AgentSchema) -> AgentSchema:
 
     curated_question = state.curated_ques
 
-    # Always connect with the read-only database user (agent_reader)
-    obj = DatabaseUtil(reader_connection_details())
+    schema_info = get_schema_context()
 
-    schema_info = obj.schema_details("public")  # Fetch schema details from the database
-
-    # Constructing the prompt query for the agent to generate the SQL query
     prompt = f"""
-    You are an SQL analyst agent. Your task is to convert the user's natural language
-    query into Postgres SQL query that can be executed on the database. You are provided
-    with the user's original query and the schema details of the database, including
-    table names, column names, data types, and sample data for each table so that
-    you can understand the structure of the database and generate an accurate SQL query.
-    Unless user explicitly asks for specific number of rows, always limit the output to 10 rows.
-    Note - Just generate the SQL query without any explanation or additional text because
-    this query will be executed directly on the database. So, the output should be SQL
-    ready to be executed without any modifications.
+You are an expert PostgreSQL analyst. Write ONE PostgreSQL query that answers the
+user's question, using the database described below.
 
-    User's Original Query: {curated_question}
+Rules:
+1. Use only the tables and columns listed in the schema.
+2. Only add filters that the question asks for or that the data notes require.
+   Don't add extra conditions.
+3. Row limits: if the question asks for individual records (for example a list of
+   rides or users), return at most 10 rows unless the user asks for a different number.
+   For counts, totals, averages and breakdowns (by category, city, month, etc.),
+   return every group and never add a LIMIT that could cut groups off. For "top N"
+   questions use LIMIT N. For "the most" or "the highest", include ties.
+4. Percentages and rates: the denominator must be the whole group named in the
+   question. Check that joins don't shrink or duplicate it.
+5. When counting things that may have no matching rows (for example drivers with no
+   rides), start from the table that lists all of them and use NOT EXISTS or a LEFT JOIN.
+6. Give computed columns clear names with AS.
+7. Return only the SQL query, with no explanation, because it will be executed directly.
 
-    Database Schema Details:
-    {schema_info}
+Data notes:
+{DATA_NOTES}
 
-    """
+{schema_info}
+
+User's question: {curated_question}
+"""
 
     return {"prompt_query_context": prompt}
 
@@ -79,7 +100,7 @@ def generate_sql(state: AgentSchema) -> AgentSchema:
     prompt = state.prompt_query_context
 
     llm = pick_llm("medium")  # Pick the appropriate LLM based on the specified level
-    generated_sql_query = llm.invoke(prompt).content
+    generated_sql_query = llm.invoke(prompt).text
 
     return {"generated_sql_query": clean_sql(generated_sql_query)}
 
@@ -144,12 +165,14 @@ def represent_final_answer(state: AgentSchema) -> AgentSchema:
     execution result of the SQL query and the user's original question. The final answer should be
     concise, clear, and directly address the user's query. Avoid including any SQL code or technical
     details in the final answer. The final answer should be in a user-friendly format that is easy to
-    understand. If the execution result is empty or does not provide a clear answer to the user's question, explain this in the final answer. \n
+    understand. If the execution result is empty or does not provide a clear answer to the user's question, explain this in the final answer.
+    Base the answer only on the execution result. Don't guess about data that isn't in the result
+    (for example, don't claim the data stops at a certain date unless the result shows it). \n
     Here is the execution result: {execution_result} \n
     Here is the user's original question: {curated_question}
     """
 
-    llm_response = llm.invoke(prompt).content  # Get the final answer from the LLM
+    llm_response = llm.invoke(prompt).text  # Get the final answer from the LLM
 
     return {"final_answer": llm_response, "messages": [AIMessage(content=llm_response)]}
 

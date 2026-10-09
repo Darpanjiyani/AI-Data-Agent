@@ -31,6 +31,24 @@ def reader_connection_details() -> dict:
     }
 
 
+def _unique_column_names(columns: list) -> list:
+    """
+    Make column names unique, e.g. ["extract", "extract"] -> ["extract", "extract_2"].
+    Without this, two columns with the same name (common with unnamed
+    expressions like EXTRACT(...) or COUNT(*)) would overwrite each other.
+    """
+    seen = {}
+    unique = []
+    for name in columns:
+        if name in seen:
+            seen[name] += 1
+            unique.append(f"{name}_{seen[name]}")
+        else:
+            seen[name] = 1
+            unique.append(name)
+    return unique
+
+
 class DatabaseUtil:
 
     def __init__(self, db_config: dict):
@@ -42,11 +60,28 @@ class DatabaseUtil:
         connection.set_session(readonly=True)  # extra layer on top of the read-only user
         return connection
 
-    def schema_details(self, schema_name: str) -> str:
+    def schema_details(
+        self,
+        schema_name: str,
+        tables: list | None = None,
+        sample_rows: int = 3,
+        masked_columns: tuple = ("email", "phone"),
+        max_listed_values: int = 10,
+    ) -> str:
         """
-        Build a text description of every table in the schema: column names,
-        data types and a few sample rows. This is given to the LLM as context
-        for writing SQL.
+        Build a compact text description of the database for the LLM:
+
+        - each table's columns and data types,
+        - the allowed values of short text columns (e.g. status: cancelled, completed, ...),
+        - a few sample rows, with personal columns (email, phone) hidden,
+        - the relationships between tables (foreign keys).
+
+        Args:
+            schema_name: database schema to describe, usually "public".
+            tables: only describe these tables (None = every table in the schema).
+            sample_rows: number of example rows per table.
+            masked_columns: columns whose sample values are replaced with <hidden>.
+            max_listed_values: list a text column's values if it has at most this many.
         """
         try:
             connection = self._connect()
@@ -54,7 +89,7 @@ class DatabaseUtil:
             print(f"Error connecting to the database: {e}")
             return f"Error connecting to the database: {e}"
 
-        schema_info_context = f"Database Schema: {schema_name}\n"
+        lines = [f"Database schema: {schema_name}"]
 
         try:
             with connection.cursor() as cursor:
@@ -68,11 +103,14 @@ class DatabaseUtil:
                     (schema_name,),
                 )
                 tables_list = [row[0] for row in cursor.fetchall()]
+                if tables is not None:
+                    tables_list = [t for t in tables_list if t in tables]
 
                 for table_name in tables_list:
-                    schema_info_context += f"\nTable: {table_name}\n"
+                    table_id = sql.SQL("{}.{}").format(sql.Identifier(schema_name), sql.Identifier(table_name))
+                    lines.append(f"\nTable: {table_name}")
 
-                    # Column names and data types, in table order
+                    # Columns and data types, in table order
                     cursor.execute(
                         """
                         SELECT column_name, data_type
@@ -82,22 +120,75 @@ class DatabaseUtil:
                         """,
                         (schema_name, table_name),
                     )
-                    for column_name, data_type in cursor.fetchall():
-                        schema_info_context += f" Column: {column_name}, Data Type: {data_type}\n"
+                    columns = cursor.fetchall()
 
-                    # First 5 rows as examples. Identifiers are quoted safely.
+                    for column_name, data_type in columns:
+                        line = f"  - {column_name} ({data_type})"
+
+                        # List the values of short text columns so the LLM uses exact spellings
+                        if data_type in ("character varying", "text") and column_name not in masked_columns:
+                            cursor.execute(
+                                sql.SQL("SELECT DISTINCT {} FROM {} LIMIT %s").format(
+                                    sql.Identifier(column_name), table_id
+                                ),
+                                (max_listed_values + 1,),
+                            )
+                            values = [row[0] for row in cursor.fetchall()]
+                            if len(values) <= max_listed_values:
+                                shown = sorted(repr(v) if v is not None else "NULL" for v in values)
+                                line += f" values: {', '.join(shown)}"
+                        lines.append(line)
+
+                    # A few example rows, with personal data hidden
                     cursor.execute(
-                        sql.SQL("SELECT * FROM {}.{} LIMIT 5;").format(
-                            sql.Identifier(schema_name), sql.Identifier(table_name)
-                        )
+                        sql.SQL("SELECT * FROM {} LIMIT %s").format(table_id), (sample_rows,)
                     )
+                    column_names = [desc[0] for desc in cursor.description]
+                    lines.append(f"  Sample rows ({' | '.join(column_names)}):")
                     for row in cursor.fetchall():
-                        schema_info_context += f" Row: {row}\n"
+                        cells = []
+                        for name, value in zip(column_names, row):
+                            if name in masked_columns:
+                                cells.append("<hidden>")
+                            elif value is None:
+                                cells.append("NULL")
+                            else:
+                                cells.append(str(value))
+                        lines.append("    " + " | ".join(cells))
+
+                # Relationships between the described tables (read from pg_catalog,
+                # which, unlike information_schema, is visible to a read-only user)
+                cursor.execute(
+                    """
+                    SELECT src.relname, a.attname, dst.relname, af.attname
+                    FROM pg_constraint c
+                    JOIN pg_class src ON src.oid = c.conrelid
+                    JOIN pg_class dst ON dst.oid = c.confrelid
+                    JOIN pg_namespace n ON n.oid = c.connamespace
+                    CROSS JOIN LATERAL unnest(c.conkey, c.confkey) AS k(attnum, fattnum)
+                    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+                    JOIN pg_attribute af ON af.attrelid = c.confrelid AND af.attnum = k.fattnum
+                    WHERE c.contype = 'f' AND n.nspname = %s
+                    ORDER BY 1, 2;
+                    """,
+                    (schema_name,),
+                )
+                relationships = [
+                    f"  - {src}.{col} -> {dst}.{dst_col}"
+                    for src, col, dst, dst_col in cursor.fetchall()
+                    if src in tables_list and dst in tables_list
+                ]
+                if relationships:
+                    lines.append("\nRelationships (foreign keys):")
+                    lines.extend(relationships)
+
+            schema_info_context = "\n".join(lines)
 
         except Exception as e:
             print(f"Error retrieving schema details: {e}")
             schema_info_context = f"Error retrieving schema details: {e}"
         finally:
+            connection.rollback()
             connection.close()
 
         return schema_info_context
@@ -120,7 +211,7 @@ class DatabaseUtil:
                 if cursor.description is None:
                     return "The query did not return any rows."
 
-                columns = [col[0] for col in cursor.description]
+                columns = _unique_column_names([col[0] for col in cursor.description])
                 rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
             # default=str converts dates, timestamps and decimals to text

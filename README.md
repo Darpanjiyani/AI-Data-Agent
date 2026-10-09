@@ -1,19 +1,48 @@
 # 🤖 AI Data Agent
 
-Ask questions about your data in plain English, and let a team of AI agents answer them.
+Ask questions about your data in plain English, and let a team of AI agents answer them safely.
 
-AI Data Agent is a multi-agent system built with **LangGraph** and **Claude**. A router agent reads your request and sends it to one of two specialists:
+![Python](https://img.shields.io/badge/Python-3.11+-blue) ![LangGraph](https://img.shields.io/badge/LangGraph-multi--agent-purple) ![Claude](https://img.shields.io/badge/LLM-Claude-orange) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-read--only-336791)
 
-- **SQL Analyst**: turns a question like *"Which payment methods do riders use most?"* into a PostgreSQL query, runs it, and explains the result in plain language.
-- **ETL Analyst**: extracts data from REST APIs and transforms CSV/JSON files using pandas, saving the output as CSV, JSON, or Parquet.
-
-The project ships with a sample ride-sharing dataset (users, vehicles, rides, payments, ratings) so you can try it end to end.
-
-> **Status:** v1, a working learning/portfolio project. See [Known limitations](#-known-limitations) and [Roadmap](#-roadmap) before using it with real or sensitive data.
+| 47-question eval baseline | SQL safety | Unsafe requests executed | Schema prompt size |
+|:---:|:---:|:---:|:---:|
+| **89.4%** execution accuracy | **3 layers** | **0 / 4** | **41% smaller** in Round 2 |
 
 ---
 
-## 🏗️ How it works
+## Contents
+
+1. [Project Overview](#1-project-overview)
+2. [Architecture](#2-architecture)
+3. [Features](#3-features)
+4. [Getting Started](#4-getting-started)
+5. [Safety Improvements](#5-safety-improvements)
+6. [Evaluation Framework](#6-evaluation-framework)
+7. [Performance Evolution](#7-performance-evolution)
+8. [Roadmap](#8-roadmap)
+9. [Future Work](#9-future-work)
+10. [Project Structure](#10-project-structure)
+11. [Troubleshooting](#11-troubleshooting)
+
+---
+
+## 1. Project Overview
+
+AI Data Agent is a multi-agent system built with **LangGraph** and **Claude**. A router agent reads each request and sends it to one of two specialists:
+
+- **SQL Analyst** turns a question like *"Which payment methods do riders use most?"* into a PostgreSQL query, checks that it is safe, runs it, and explains the result in plain language.
+- **ETL Analyst** extracts data from REST APIs and transforms CSV/JSON/Parquet files with pandas.
+
+The project ships with a synthetic ride-sharing dataset (users, vehicles, rides, payments, ratings) and an **evaluation framework** that measures accuracy, safety and routing, so every improvement is backed by numbers. The full history of changes and results is in [docs/experiments.md](docs/experiments.md).
+
+**Highlights**
+- Three independent layers of SQL safety; unsafe requests are never executed.
+- A 59-question evaluation harness with execution accuracy and LLM-as-a-judge scoring.
+- Measured, documented improvement rounds: each change is evaluated before and after.
+
+---
+
+## 2. Architecture
 
 ```
                      ┌──────────────────────────────┐
@@ -25,89 +54,92 @@ The project ships with a sample ride-sharing dataset (users, vehicles, rides, pa
                 ▼                                       ▼
      ┌─────────────────────┐                 ┌─────────────────────┐
      │     SQL Analyst     │                 │     ETL Analyst     │
-     │ (fixed pipeline)    │                 │ (tool-using agent)  │
+     │  (fixed pipeline)   │                 │ (tool-using agent)  │
      └─────────────────────┘                 └─────────────────────┘
        1. Rewrite question                     Claude picks a tool and
-       2. Read DB schema + samples             loops until the task is done:
+       2. Schema + data notes (cached)         loops until the task is done:
        3. Generate SQL                         • extract_load_tool
        4. SQL guard + LLM safety judge         • transform_load_tool
-       5. Execute as read-only user
-       6. Explain the answer
+       5. Execute as read-only user              (code runs in an isolated,
+       6. Explain the answer                      time-limited process)
 ```
 
-### Data Agent (router): `agents/data_agent.py`
-Claude reads your latest message and returns a structured decision, either `sql` or `etl` (enforced by the `RouterSchema` Pydantic model). The request is then passed to the matching sub-agent.
+| Component | File | Role |
+|---|---|---|
+| Router | `agents/data_agent.py` | Structured-output classification (`sql` / `etl`) with a Pydantic schema |
+| SQL Analyst | `agents/sql_analyst.py` | LangGraph pipeline from question to answer |
+| ETL Analyst | `agents/etl_analyst.py` | ReAct-style tool-calling loop |
+| Schema context | `utils/database.py`, `utils/schema_notes.py` | Tables, columns, allowed values, foreign keys, data notes |
+| SQL guard | `utils/sql_guard.py` | Rule-based check: one read-only `SELECT` only |
+| ETL tools | `utils/etl_tools.py` | API extraction, file reading, isolated code execution |
+| Model selection | `utils/llm_pick.py` | Smaller model for simple steps, stronger model for hard ones |
 
-### SQL Analyst: `agents/sql_analyst.py`
-A fixed LangGraph pipeline:
+**Model tiers**
 
-1. **Curate question**: a fast model rewrites the question more clearly.
-2. **Build context**: reads every table's columns, data types, and 5 sample rows from PostgreSQL.
-3. **Generate SQL**: Claude writes a PostgreSQL query (limited to 10 rows unless you ask for more).
-4. **Safety checks**: a rule-based SQL guard (`sqlglot`) allows only a single read-only `SELECT`; queries that pass are then reviewed by a Claude "judge" as a second opinion.
-5. **Execute or cancel**: approved queries run through a read-only PostgreSQL user; rejected ones stop with an explanation.
-6. **Final answer**: the result (with column names) is turned into a short, plain-English answer.
+| Level | Model | Used for |
+|---|---|---|
+| `low` | Claude Haiku | Rewriting the question, writing the final answer |
+| `medium` | Claude Sonnet | Generating SQL, safety judge, eval judge |
+| `claude` | Claude Sonnet | Router, ETL agent, pandas code generation |
+| `high` | Claude Opus | Defined, not used yet |
+
+<details>
+<summary>Workflow diagrams generated by LangGraph</summary>
 
 ![SQL Analyst workflow](sql_analyst_graph.png)
-
-### ETL Analyst: `agents/etl_analyst.py`
-A tool-calling agent. Claude decides which tool to call, sees the result, and continues until the task is complete.
-
-- **`extract_load_tool`**: calls an API URL, flattens the JSON (the `results` list if there is one) with `pandas.json_normalize`, and saves it as `extracted_data.<format>` in a folder inside `data/`.
-- **`transform_load_tool`**: shows Claude the first 3 rows of a CSV/JSON/Parquet file, asks it to write pandas code for your request, then runs that code in a separate process with a time limit to save the transformed output.
-
-Both tools only accept file paths inside the project's `data/` folder.
-
 ![ETL Analyst workflow](etl_analyst_graph.png)
 
+</details>
+
 ---
 
-## 📊 Sample dataset
+## 3. Features
 
-The `data/` folder contains a synthetic ride-sharing dataset for a company operating in Canadian cities (Halifax, Vancouver, Winnipeg, Montreal, and others).
+### SQL Analyst
+- Converts natural-language questions into PostgreSQL.
+- Gives the model a compact description of the data: columns, the exact allowed values of short text columns, foreign keys, sample rows (with emails and phone numbers hidden) and data notes.
+- Follows explicit rules for row limits, filters, percentages and "has none" questions.
+- Blocks anything that isn't a single read-only query, then runs it as a read-only database user.
+- Returns results with column names and explains them in plain English.
 
-| Table | Rows | What it contains |
+### ETL Analyst
+- Extracts JSON from REST APIs and saves it as CSV, JSON or Parquet.
+- Transforms existing files: Claude writes the pandas code, which runs in a separate, time-limited process without access to your secrets.
+- Only reads and writes inside the project's `data/` folder.
+
+### Sample dataset
+
+A synthetic ride-sharing company operating in eight Canadian cities:
+
+| Table | Rows | Contents |
 |---|---:|---|
-| `users` | 10,000 | 7,000 riders and 3,000 drivers: name, email, phone, city, province, signup date |
-| `vehicles` | 3,000 | Each driver's car: make, model, year, colour, licence plate |
-| `rides` | 20,000 | Pickup/drop-off times and coordinates, distance, fare, surge multiplier, status, cancellation reason |
-| `payments` | 16,073 | One per completed ride: amount, method (card, PayPal, Apple Pay, Google Pay), status |
-| `ratings` | 12,000 | 1–5 star rating and comment for a ride |
+| `users` | 10,000 | 7,000 riders and 3,000 drivers: city, province, signup date |
+| `vehicles` | 3,000 | One vehicle per driver: make, model, year, colour |
+| `rides` | 20,000 | Times, coordinates, distance, fare, surge multiplier, status, cancellation reason |
+| `payments` | 16,073 | One per completed ride: amount, method, status |
+| `ratings` | 12,000 | 1 to 5 stars and a comment |
 
-Tables are linked by IDs (for example, `rides.driver_id → users.user_id`, `payments.ride_id → rides.ride_id`). `utils/feed_db.py` creates the tables with primary keys, foreign keys, a 1–5 rating check, and indexes, then bulk-loads the CSVs with PostgreSQL `COPY`.
-
-All names, emails, and phone numbers are fake (emails use `@example.com`).
+All names, emails and phone numbers are fake.
 
 ---
 
-## 📦 Prerequisites
+## 4. Getting Started
 
-- **Python 3.11+**
-- **[uv](https://docs.astral.sh/uv/)** (recommended) or pip
-- **PostgreSQL** running locally or remotely
-- An **Anthropic API key** ([console.anthropic.com](https://console.anthropic.com/))
-- An internet connection (for the Claude API, API extraction, and graph image rendering)
+### Prerequisites
+- Python 3.11+ and [uv](https://docs.astral.sh/uv/) (or pip)
+- PostgreSQL
+- An Anthropic API key
 
----
-
-## 🚀 Setup
-
-### 1. Clone the repository
+### 1. Clone and install
 
 ```bash
 git clone https://github.com/Darpanjiyani/AI-Data-Agent.git
 cd AI-Data-Agent
-```
-
-### 2. Install dependencies
-
-With uv (uses `pyproject.toml` and `uv.lock`):
-
-```bash
 uv sync
 ```
 
-Or with pip:
+<details>
+<summary>Using pip instead</summary>
 
 ```bash
 python -m venv .venv
@@ -119,17 +151,15 @@ source .venv/bin/activate
 pip install dotenv ipython langchain langchain-anthropic langgraph pandas psycopg2-binary pydantic requests sqlglot pyarrow
 ```
 
-### 3. Create the database
+</details>
 
-In psql or pgAdmin:
+### 2. Create the database and a read-only user
 
 ```sql
 CREATE DATABASE ride_share;
 ```
 
-### 4. Create a read-only database user
-
-The agent never uses your admin account. Connected as your admin user (for example `postgres`), run this in psql or pgAdmin, choosing your own password:
+Then, connected to `ride_share` as your admin user, create the user the agent connects with (choose your own password):
 
 ```sql
 CREATE ROLE agent_reader LOGIN PASSWORD 'choose_a_strong_password';
@@ -145,11 +175,7 @@ ALTER ROLE agent_reader SET statement_timeout = '15s';
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 ```
 
-Run this while connected to the `ride_share` database (the `GRANT ... SCHEMA public` lines apply to the database you're connected to). It can be run before or after loading the data in step 6.
-
-### 5. Create a `.env` file
-
-Copy `.env.example` to `.env` and fill in your values:
+### 3. Configure `.env`
 
 ```bash
 cp .env.example .env        # macOS / Linux
@@ -160,37 +186,26 @@ copy .env.example .env      # Windows
 |---|---|
 | `ANTHROPIC_API_KEY` | All agents |
 | `DB_HOST`, `DB_PORT`, `DB_NAME` | Database connection |
-| `DB_READER_USER`, `DB_READER_PASSWORD` | The agent (read-only user from step 4) |
-| Lowercase `host`, `port`, `database`, `user`, `password` | Only `utils/feed_db.py` (admin user, to create tables and load data) |
+| `DB_READER_USER`, `DB_READER_PASSWORD` | The agent (read-only user) |
+| Lowercase `host`, `port`, `database`, `user`, `password` | Only `utils/feed_db.py` (admin user, to load data) |
 
-`.env` is listed in `.gitignore`. Never commit it or share it.
+`.env` is in `.gitignore`. Never commit it.
 
-### 6. Load the sample data
-
-Run this **once** from the project root:
+### 4. Load the sample data (once)
 
 ```bash
 uv run utils/feed_db.py
-# or: python utils/feed_db.py
 ```
 
-It prints the record count for each table when finished. Running it a second time will fail on duplicate primary keys; to reload from scratch, uncomment the `TRUNCATE` block in `utils/feed_db.py`.
-
----
-
-## 💻 Usage
-
-Run all commands from the project root.
-
-### Run the full system
+### 5. Ask questions
 
 ```bash
-uv run main.py
+uv run main.py                     # full system (router → agent)
+uv run agents/sql_analyst.py       # SQL agent only
+uv run agents/etl_analyst.py       # ETL agent only
 ```
 
-`main.py` sends one example request (extracting Pokémon data from the PokéAPI) to the router. Edit the message in `main.py` to ask your own question.
-
-### Use it from Python
+From Python:
 
 ```python
 from agents.data_agent import data_agent
@@ -200,192 +215,195 @@ response = data_agent.invoke({
     "messages": [HumanMessage(content="Which 5 drivers have the highest average rating?")],
     "route_response": "",
 })
-
-print(response["messages"][-1])
+print(response["messages"][-1].content)
 ```
 
-### Run a single agent
+**Example requests**
+- "How many cancelled rides were there for each cancellation reason?"
+- "What is the total revenue from completed payments by payment method?"
+- "Extract the data from https://pokeapi.co/api/v2/pokemon and save it to data/extract as CSV."
+- "Read data/extract/extracted_data.csv, keep only names starting with 'c', and save it to data/transform as CSV."
+
+---
+
+## 5. Safety Improvements
+
+The original version relied on one LLM check and ran AI-written code directly. Each layer below was added and tested in [Round 1](docs/experiments.md#exp-01--safety-hardening).
+
+| Risk | Original version | Now |
+|---|---|---|
+| Harmful SQL (DELETE, DROP, ...) | One LLM "judge" decided | **3 layers:** rule-based guard → LLM judge → read-only database user |
+| Runaway queries | No limit | 15-second statement timeout |
+| AI-generated pandas code | `exec()` inside the app | Separate process, 60-second limit, no API keys or passwords |
+| File access by ETL tools | Any path | Only inside `data/` |
+| Personal data sent to the LLM | Sample rows with emails and phones | Emails and phone numbers hidden |
+| Secrets | `.env` | `.env` (git-ignored) plus `.env.example` template |
+
+### SQL: three layers
+1. **SQL guard** (`utils/sql_guard.py`): a `sqlglot` parser allows exactly one read-only `SELECT`. It blocks writes, DDL, multiple statements, `SELECT ... INTO`, row locks and server functions like `pg_terminate_backend`, including inside CTEs. Blocked queries never reach the LLM judge or the database.
+2. **LLM judge:** a second opinion on queries that pass the guard.
+3. **Read-only role:** the agent connects as `agent_reader` (SELECT only, read-only transactions, 15-second timeout). Even a query that got past both checks couldn't change anything.
+
+In the evaluation, all 4 unsafe requests (delete, update, drop, and "show then delete") were stopped by the guard, and table row counts were unchanged.
+
+### ETL: isolation, not a full sandbox
+Generated code runs in a separate Python process, so it can't crash or freeze the app and can't read your secrets. It can still read and write files your user account can access; running it in a container is on the [roadmap](#8-roadmap).
+
+---
+
+## 6. Evaluation Framework
+
+`evals/` measures the agent with **59 questions** about the ride-sharing data.
+
+| Set | Questions | What is checked |
+|---|---:|---|
+| SQL | 47 | 6 simple, 12 aggregation, 8 join, 4 date, 4 tricky (ties, zero answers, easy-to-forget filters), 13 hard (medians, window functions, rates, growth) |
+| Safety | 4 | Requests to change data are never executed |
+| Routing | 8 | Each request goes to the right agent |
+
+### How scoring works
+- **The agent only sees the question.** Each question has a reference SQL query that acts as an answer key: the runner uses it to calculate the correct answer from the live data.
+- **Answers are compared, not queries.** Any query that returns the right data passes. Column names, column order and row order don't matter; numbers are compared to 2 decimals; extra columns are allowed. "Which is the most..." questions accept a full ranking with the right answer first, and some questions accept equivalent formats (month numbers or month dates).
+
+Every answer gets two scores:
+- **Execution accuracy (strict):** the agent's result matches the correct data.
+- **Answer accuracy (LLM-as-a-judge):** Claude agrees that the plain-English answer is correct.
+
+The runner also records time and tokens per question, checks safety and routing, and confirms that no table changed.
+
+### Running it
 
 ```bash
-uv run agents/sql_analyst.py   # asks about payment methods, prints SQL + result
-uv run agents/etl_analyst.py   # extracts PokéAPI data to data/extract/
+uv run evals/run_eval.py                     # full run
+uv run evals/run_eval.py --limit 5           # quick check
+uv run evals/run_eval.py --category hard     # one category
+uv run evals/run_eval.py --ids s01 t01       # specific questions
+uv run evals/run_eval.py --no-judge          # skip the LLM judge (cheaper)
 ```
 
-Running an agent file directly also regenerates its workflow diagram (`*_graph.png`).
+Each run writes a Markdown report (summary, per-question results, and every failure with its generated SQL) and a JSON file to `evals/results/`.
+
+### Keeping it honest
+- The eval is only changed when an answer key or a question's wording is wrong, never to raise the score.
+- Agent improvements must be general (better context, clearer rules), not special cases for these questions.
+- Limitation: the score reflects these 59 questions. A held-out set is planned to confirm improvements generalise.
 
 ---
 
-## 📚 Example requests
+## 7. Performance Evolution
 
-**SQL (answered from the database)**
-- "What are the different payment methods in our database?"
-- "How many rides were cancelled, grouped by cancellation reason?"
-- "Which 5 drivers have the highest average rating?"
-- "What is the total revenue from completed payments by payment method?"
+| Version | Changes | Execution accuracy | Answer accuracy | Input tokens / question | Time / question |
+|---|---|:---:|:---:|:---:|:---:|
+| v1.0 | Original multi-agent system | not measured¹ | – | – | – |
+| v1.1 | Round 1: safety hardening and bug fixes | not measured² | – | – | – |
+| v1.2 | Evaluation baseline (47 SQL questions) | **89.4%** | **89.4%** | 4,959 | 6.5 s |
+| v2.0 | Round 2: schema context and SQL rules | *pending* | *pending* | *pending* | *pending* |
 
-**ETL: extract from an API**
-- "Extract the data from https://pokeapi.co/api/v2/pokemon and save it to data/extract as CSV."
+¹ The SQL agent crashed on every question (an invalid `reasoning_effort` setting) until Round 1.
+² The evaluation framework was built after Round 1.
 
-**ETL: transform a file**
-- "Read data/extract/extracted_data.csv, keep only Pokémon whose name starts with 'c', and save the result to data/transform as CSV."
+**Baseline by category:** simple, aggregation and tricky 100%; join 87.5%; date 75%; hard 76.9%. Safety 4/4, routing 8/8.
+
+**What the baseline failures showed:** a crash on Claude replies that arrive as content blocks, results cut to 10 rows by the prompt, a wrong denominator in a percentage, an unrequested filter, and counting from the wrong group. Round 2 targets each of these with general fixes. Full analysis: [docs/experiments.md](docs/experiments.md).
 
 ---
 
-## 📁 Project structure
+## 8. Roadmap
+
+**Safety**
+- [x] Read-only database user with a query timeout
+- [x] Rule-based SQL validation before the LLM judge
+- [x] Isolated, time-limited execution for generated ETL code
+- [x] Personal columns hidden from the LLM
+- [ ] Run generated ETL code in a container
+
+**Accuracy**
+- [x] Query results with column names
+- [x] Evaluation set with reference SQL and LLM-as-a-judge
+- [x] Schema context: agent tables only, allowed values, foreign keys, data notes
+- [x] SQL rules: row limits, filters, denominators, "has none" questions
+- [ ] Self-correcting SQL: retry with the database error
+- [ ] Conversation memory with a LangGraph checkpointer
+- [ ] Held-out evaluation questions
+- [ ] Repeated eval runs to measure run-to-run variance
+
+**Cost and speed**
+- [x] Schema built once per process; SQL prompt 41% smaller
+- [ ] Prompt caching for the schema context
+- [ ] Compare a decision model (e.g. Jev) with Sonnet for routing
+
+**Features**
+- [ ] Streamlit chat interface with the answer, generated SQL and result table
+- [ ] Automatic charts for query results
+- [ ] Load transformed data into PostgreSQL with human approval
+- [ ] Pagination and authentication for API extraction
+
+---
+
+## 9. Future Work
+
+- **Continuous evaluation:** run the eval in GitHub Actions against a test database on every pull request, and fail the build if accuracy drops.
+- **Observability:** trace every step, prompt and token count with LangSmith to debug wrong answers quickly.
+- **Full sandboxing:** run generated code in a container with no network and a read-only filesystem.
+- **Human-in-the-loop:** use LangGraph interrupts so a person approves any action that writes data.
+- **More data sources:** support MySQL, SQLite and Snowflake through SQLAlchemy, plus user-uploaded files.
+
+**Current limitations**
+- Generated ETL code is isolated but not fully sandboxed.
+- The router only sees the latest message, so follow-up questions lack context.
+- Answers can vary between runs: Claude Sonnet 5 thinks by default and doesn't accept a custom `temperature`, so variance is reduced with explicit rules rather than sampling settings.
+
+---
+
+## 10. Project Structure
 
 ```
 AI-Data-Agent/
 ├── agents/
-│   ├── data_agent.py        # Router: sends requests to the SQL or ETL agent
-│   ├── sql_analyst.py       # Natural language → SQL → answer pipeline
-│   └── etl_analyst.py       # Tool-calling agent for extract/transform tasks
+│   ├── data_agent.py        # Router
+│   ├── sql_analyst.py       # Question → SQL → answer pipeline
+│   └── etl_analyst.py       # Tool-calling agent for extract/transform
 ├── Models/
-│   └── schema.py            # Pydantic state models (AgentSchema, ETLAgentSchema, RouterSchema, ...)
+│   └── schema.py            # Pydantic state models
 ├── utils/
-│   ├── database.py          # PostgreSQL connection, schema reader, query runner
+│   ├── database.py          # Read-only connection, schema context, query runner
+│   ├── schema_notes.py      # Agent tables and data notes for the LLM
+│   ├── sql_guard.py         # Rule-based read-only check
 │   ├── etl_tools.py         # API extraction, file reading, isolated code execution
-│   ├── sql_guard.py         # Rule-based check: only one read-only SELECT allowed
-│   ├── feed_db.py           # Creates tables and loads the CSV dataset
-│   └── llm_pick.py          # Chooses the Claude model for each step
-├── data/
-│   ├── extract/             # Output of API extractions
-│   ├── users.csv
-│   ├── vehicles.csv
-│   ├── rides.csv
-│   ├── payments.csv
-│   └── ratings.csv
-├── main.py                  # Entry point with an example request
-├── .env.example             # Template for your .env file
-├── data_agent_graph.png     # Router workflow diagram
-├── sql_analyst_graph.png    # SQL agent workflow diagram
-├── etl_analyst_graph.png    # ETL agent workflow diagram
-├── test_schema_details.txt  # Example of the schema context sent to the model
+│   ├── feed_db.py           # Creates tables and loads the dataset
+│   └── llm_pick.py          # Model per step
+├── evals/
+│   ├── questions.json       # Evaluation questions with reference SQL
+│   ├── run_eval.py          # Scores the agent and writes reports
+│   └── results/             # Reports from each run
+├── docs/
+│   └── experiments.md       # Experiment log: changes, hypotheses, results
+├── data/                    # Dataset and ETL outputs
+├── main.py                  # Example request through the router
+├── .env.example             # Template for .env
 ├── pyproject.toml
 └── uv.lock
 ```
 
----
-
-## ⚙️ Model selection
-
-`utils/llm_pick.py` maps each step to a Claude model, using a smaller, faster model for simple steps and a stronger model for harder ones:
-
-| Level | Model configured | Used for |
-|---|---|---|
-| `low` | Claude Haiku | Rewriting the question, writing the final answer |
-| `medium` | Claude Sonnet | Generating SQL, safety judge |
-| `claude` | Claude Sonnet | Router, ETL agent, pandas code generation |
-| `high` | Claude Opus | Defined but not used yet |
-
-Model names are set in `utils/llm_pick.py`. Change them there to use different models.
+**Tech stack:** LangGraph, LangChain, Claude (Haiku, Sonnet), PostgreSQL (`psycopg2`), `sqlglot`, pandas, Pydantic, uv.
 
 ---
 
-## 🔐 Safety
-
-**SQL Analyst: three layers of protection**
-1. **SQL guard** (`utils/sql_guard.py`): a `sqlglot` parser allows only a single read-only `SELECT`. It blocks writes, DDL, multiple statements, `SELECT ... INTO`, row locks, and server functions like `pg_terminate_backend`, including inside CTEs. Blocked queries never reach the LLM judge or the database.
-2. **LLM judge**: queries that pass the guard are reviewed by Claude as a second opinion.
-3. **Read-only database user**: the agent connects as `agent_reader`, which only has `SELECT` permission, read-only transactions, and a 15-second query timeout. Even if a query got past both checks, PostgreSQL would refuse to change anything.
-
-Results are limited to 10 rows by default.
-
-**ETL Analyst**
-- AI-generated pandas code runs in a **separate Python process** with a 60-second time limit, so it can't crash or freeze the app.
-- That process does not receive your API key or database passwords.
-- Both ETL tools only accept file paths inside the project's `data/` folder.
-- ⚠️ This is isolation, not a full sandbox: the generated code can still read and write files your user account can access. Use it on your own machine with trusted requests.
-
-**Credentials**
-- API keys and database passwords are read from `.env`, which is excluded from Git. `.env.example` shows the variables without values.
-
-**Data privacy**
-- Sample rows from each table are sent to the Claude API as context. That's fine for this synthetic dataset; mask sensitive columns before using real customer data.
-
----
-
-## 🚧 Known limitations
-
-- Generated ETL code is isolated in a separate process but not fully sandboxed (see Safety).
-- The router only sees the latest message, so follow-up questions ("now group that by city") don't have context yet.
-- The extract tool fetches only the first page of paginated APIs and doesn't support authentication yet.
-- A typical SQL question uses about five Claude calls (router, rewrite, generate, judge, answer).
-
----
-
-## 🗺️ Roadmap
-
-**Safety**
-- [x] Read-only database user with a query timeout
-- [x] Rule-based SQL validation (single `SELECT` statement only) before the LLM judge
-- [x] Run generated ETL code in an isolated process with a time limit
-- [ ] Run generated ETL code in a container for full sandboxing
-
-**Accuracy**
-- [x] Return column names with query results
-- [ ] Evaluation set of questions with known answers
-- [ ] Self-correcting SQL: retry with the error message when a query fails
-- [ ] Add foreign keys and a business glossary to the schema context
-- [ ] Conversation memory with a LangGraph checkpointer
-
-**Features**
-- [ ] Streamlit chat interface showing the answer, generated SQL, and result table
-- [ ] Automatic charts for query results
-- [ ] Load transformed data into PostgreSQL (with human approval)
-- [ ] Pagination and authentication support for API extraction
-
----
-
-## 🛠️ Tech stack
-
-| Area | Tools |
-|---|---|
-| Agent orchestration | LangGraph |
-| LLM framework | LangChain, `langchain-anthropic` |
-| Models | Claude (Haiku, Sonnet) |
-| Database | PostgreSQL, `psycopg2` |
-| Data processing | pandas |
-| Validation | Pydantic |
-| Config | python-dotenv |
-| Packaging | uv |
-
----
-
-## 🧩 Extending the system
-
-**Add a new agent**
-1. Create a file in `agents/` and build its LangGraph workflow.
-2. Add its state model to `Models/schema.py`.
-3. Add a new option to `RouterSchema.answer` and a matching node and route in `agents/data_agent.py`.
-
-**Add an ETL tool**
-Define a function with the `@tool` decorator in `agents/etl_analyst.py` and add it to the `tools` list.
-
----
-
-## 🚨 Troubleshooting
+## 11. Troubleshooting
 
 | Problem | Solution |
 |---|---|
-| `Error connecting to the database` | Check PostgreSQL is running and the `DB_*` values in `.env` are correct |
-| `DB_READER_USER and DB_READER_PASSWORD must be set` | Create the read-only user (Setup step 4) and add both values to `.env` |
-| `permission denied for table ...` | Run the `GRANT SELECT ...` lines from Setup step 4 while connected to your database |
-| `KeyError: 'host'` when loading data | Add the lowercase `host`, `port`, `database`, `user`, `password` entries to `.env` |
-| Authentication error from Anthropic | Check `ANTHROPIC_API_KEY` in `.env` |
+| `Error connecting to the database` | Check PostgreSQL is running and the `DB_*` values in `.env` |
+| `DB_READER_USER and DB_READER_PASSWORD must be set` | Create the read-only user and add both values to `.env` |
+| `permission denied for table ...` | Run the `GRANT SELECT ...` lines while connected to your database |
+| `KeyError: 'host'` when loading data | Add the lowercase `host`, `port`, `database`, `user`, `password` entries |
+| Anthropic authentication error | Check `ANTHROPIC_API_KEY` |
+| 400 error mentioning `temperature` | Claude Sonnet 5 and Opus 5 don't accept a custom temperature; remove it from `utils/llm_pick.py` |
 | Duplicate key error when loading data | Data is already loaded; uncomment the `TRUNCATE` block to reload |
-| `ModuleNotFoundError` | Run commands from the project root, using `uv run` or an activated virtual environment |
-| Query rejected as unsafe | Rephrase as a read-only question; the agent only runs `SELECT` queries |
-| `Path must be inside the data/ folder` | Use input and output paths under `data/`, for example `data/extract/` |
-| `ran longer than 60 seconds and was stopped` | Split the transformation into smaller steps, or raise `CODE_TIMEOUT_SECONDS` in `utils/etl_tools.py` |
-
----
-
-## 📚 Learn more
-
-- [LangGraph documentation](https://langchain-ai.github.io/langgraph/)
-- [LangChain documentation](https://python.langchain.com/)
-- [Claude API documentation](https://docs.anthropic.com/)
-- [PostgreSQL documentation](https://www.postgresql.org/docs/)
+| `ModuleNotFoundError` | Run from the project root with `uv run` |
+| Query rejected as unsafe | The agent only runs read-only `SELECT` queries |
+| `Path must be inside the data/ folder` | Use paths under `data/` |
+| `ran longer than 60 seconds and was stopped` | Split the transformation, or raise `CODE_TIMEOUT_SECONDS` in `utils/etl_tools.py` |
 
 ---
 
