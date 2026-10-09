@@ -8,8 +8,7 @@ Ask questions about your data in plain English, and let a team of AI agents answ
 |:---:|:---:|:---:|:---:|
 | **89.4% → 99.3%** | **100%** | **0 / 7** | **7 / 7** |
 
-<!-- Demo: record a short screen capture of the app, save it as docs/demo.gif and uncomment the next line -->
-<!-- ![Demo of the AI Data Agent chat app](docs/demo.gif) -->
+![Demo: a question answered with a chart, the data and the SQL that ran, then a delete request refused](docs/demo.gif)
 
 ---
 
@@ -25,7 +24,6 @@ Ask questions about your data in plain English, and let a team of AI agents answ
 8. [Roadmap](#8-roadmap)
 9. [Future Work](#9-future-work)
 10. [Project Structure](#10-project-structure)
-11. [Troubleshooting](#11-troubleshooting)
 
 ---
 
@@ -249,6 +247,8 @@ print(reply.rows)     # the result rows
 - "Extract the data from https://pokeapi.co/api/v2/pokemon and save it to data/extract as CSV."
 - "Read data/extract/extracted_data.csv, keep only names starting with 'c', and save it to data/transform as CSV."
 
+Something not working? See [docs/troubleshooting.md](docs/troubleshooting.md).
+
 ---
 
 ## 5. Safety Improvements
@@ -327,36 +327,15 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 
 | Version | Changes | Execution accuracy | Answer accuracy | Input tokens / question | Time / question |
 |---|---|:---:|:---:|:---:|:---:|
-| v1.0 | Original multi-agent system | not measured | – | – | – |
+| v1.0 | Original multi-agent system | not measured (crashed) | – | – | – |
 | v1.1 | Round 1: safety hardening and bug fixes | not measured | – | – | – |
 | v1.2 | Evaluation baseline (47 SQL questions) | **89.4%** | **89.4%** | 4,959 | 6.5 s |
 | v2.0 | Round 2: schema context and SQL rules | **100%** | **100%** | 4,353 (−12%) | 6.3 s |
 | v2.0 | Same version on the **held-out set** (20 unseen questions) | **100%** | 95% | 4,335 | 5.5 s |
-| v2.1 | Round 3: clear refusals and self-correcting SQL | **99.3%** | **99.3%** | 4,432 (+2%) | 5.6 s |
+| v2.1 | Round 3: clear refusals and self-correcting SQL | **99.3%** (avg of 3 runs) | **99.3%** | 4,432 (+2%) | 5.6 s |
 | v2.1 | Same version on the **held-out set** | **100%** | **100%** | 4,413 | 5.6 s |
 
-¹ The SQL agent crashed on every question (an invalid `reasoning_effort` setting) until Round 1.
-² The evaluation framework was built after Round 1.
-³ 95% as first scored; the one miss was a scoring bug (a date vs a midnight timestamp for the same month), fixed and re-scored.
-⁴ The one "incorrect" verdict was a judge error: its reasoning found every value correct. The judge now reasons before deciding.
-⁵ Average of 3 runs (100%, 100%, 97.9%). The one miss was a single question in one run (see [EXP-05](docs/experiments.md#exp-05--clear-refusals-and-self-correction)).
-
-| Category | Questions | v1.2 baseline | v2.0 | v2.1 (3-run avg) |
-|---|---:|:---:|:---:|:---:|
-| simple | 6 | 100% | 100% | 100% |
-| aggregation | 12 | 100% | 100% | 100% |
-| join | 8 | 87.5% | 100% | 100% |
-| date | 4 | 75% | 100% | 100% |
-| tricky | 4 | 100% | 100% | 100% |
-| hard | 13 | 76.9% | 100% | 97.4% |
-
-Safety stayed at 4/4 (nothing executed) and routing at 8/8 in every version. Clear refusals went from 2/4 in v2.0 to 4/4 in all three v2.1 runs (and 3/3 on the held-out set).
-
-**What changed:** the baseline failures were a crash on Claude replies that arrive as content blocks, results cut to 10 rows by the prompt, a wrong denominator in a percentage, an unrequested filter, and counting from the wrong group. Round 2 fixed all five with general changes: reading replies with `.text`, a compact schema context with allowed values and foreign keys, data notes, and explicit SQL rules. Full analysis: [docs/experiments.md](docs/experiments.md).
-
-**Round 3:** change requests are now recognised before any SQL is written and get a clear, consistent refusal, and a query that fails with a database error is rewritten and retried (up to 2 times, re-checked for safety each time). The extra rule added about 2% input tokens.
-
-**Caveats:** the main set was used while designing fixes, so the held-out set is the better estimate for new questions. Results vary a little between runs (1 miss in 141 question runs), which is why v2.1 is reported as an average of 3. The retry loop never fired in these runs, since no query hit a database error, so so far it's only tested offline. It also can't catch a query that runs but returns the wrong shape, which is what caused the one miss.
+Results by category, notes on each number, and the caveats are in [docs/experiments.md](docs/experiments.md#results-by-version); every round has its own write-up there.
 
 ---
 
@@ -436,7 +415,9 @@ AI-Data-Agent/
 │   ├── run_eval.py          # Scores the agent and writes reports
 │   └── results/             # Reports from each run
 ├── docs/
-│   └── experiments.md       # Experiment log: changes, hypotheses, results
+│   ├── experiments.md       # Experiment log: changes, hypotheses, results
+│   ├── troubleshooting.md   # Common errors and fixes
+│   └── demo.gif             # Demo of the chat app
 ├── data/                    # Dataset and ETL outputs
 ├── app.py                   # Streamlit chat app
 ├── main.py                  # Example request through the router
@@ -446,26 +427,6 @@ AI-Data-Agent/
 ```
 
 **Tech stack:** LangGraph, LangChain, Claude (Haiku, Sonnet), PostgreSQL (`psycopg2`), `sqlglot`, pandas, Pydantic, Streamlit, Altair, uv.
-
----
-
-## 11. Troubleshooting
-
-| Problem | Solution |
-|---|---|
-| `Error connecting to the database` | Check PostgreSQL is running and the `DB_*` values in `.env` |
-| `DB_READER_USER and DB_READER_PASSWORD must be set` | Create the read-only user and add both values to `.env` |
-| `permission denied for table ...` | Run the `GRANT SELECT ...` lines while connected to your database |
-| `KeyError: 'host'` when loading data | Add the lowercase `host`, `port`, `database`, `user`, `password` entries |
-| Anthropic authentication error | Check `ANTHROPIC_API_KEY` |
-| 400 error mentioning `temperature` | Claude Sonnet 5 and Opus 5 don't accept a custom temperature; remove it from `utils/llm_pick.py` |
-| Duplicate key error when loading data | Data is already loaded; uncomment the `TRUNCATE` block to reload |
-| `ModuleNotFoundError` | Run from the project root with `uv run` |
-| App shows "The app needs these settings" | Add the listed values to `.env` in the project root, then refresh the page |
-| `streamlit: command not found` | Run `uv sync`, then start it with `uv run streamlit run app.py` |
-| Query rejected as unsafe | The agent only runs read-only `SELECT` queries |
-| `Path must be inside the data/ folder` | Use paths under `data/` |
-| `ran longer than 60 seconds and was stopped` | Split the transformation, or raise `CODE_TIMEOUT_SECONDS` in `utils/etl_tools.py` |
 
 ---
 

@@ -16,6 +16,34 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 
 ---
 
+## Results by version
+
+The version table in the README, with the detail behind each number.
+
+| Category | Questions | v1.2 baseline | v2.0 | v2.1 (3-run avg) |
+|---|---:|:---:|:---:|:---:|
+| simple | 6 | 100% | 100% | 100% |
+| aggregation | 12 | 100% | 100% | 100% |
+| join | 8 | 87.5% | 100% | 100% |
+| date | 4 | 75% | 100% | 100% |
+| tricky | 4 | 100% | 100% | 100% |
+| hard | 13 | 76.9% | 100% | 97.4% |
+
+Safety stayed at 4/4 (nothing executed) and routing at 8/8 in every version. Clear refusals went from 2/4 in v2.0 to 4/4 in all three v2.1 runs (and 3/3 on the held-out set).
+
+**Notes on the numbers**
+- **v1.0, not measured:** the SQL agent crashed on every question (an invalid `reasoning_effort` setting) until Round 1.
+- **v1.1, not measured:** the evaluation framework was built after Round 1.
+- **v2.0 held-out, 100% execution:** 95% as first scored; the one miss was a scoring bug (a date vs a midnight timestamp for the same month), fixed and re-scored ([EXP-04](#exp-04--held-out-evaluation)).
+- **v2.0 held-out, 95% answer accuracy:** the one "incorrect" verdict was a judge error; its own reasoning found every value correct. The judge now reasons before deciding.
+- **v2.1, 99.3%:** average of 3 runs (100%, 100%, 97.9%). The one miss was a single question in one run ([EXP-05](#exp-05--clear-refusals-and-self-correction)).
+
+**What changed in each round:** Round 2 fixed the five baseline failures with general changes ([EXP-03](#exp-03--schema-context-and-sql-rules)); Round 3 added clear refusals and self-correcting SQL ([EXP-05](#exp-05--clear-refusals-and-self-correction)).
+
+**Caveats:** the main set was used while designing fixes, so the held-out set is the better estimate for new questions. Results vary a little between runs (1 miss in 141 question runs), which is why v2.1 is reported as an average of 3. The retry loop never fired in these runs, since no query hit a database error, so it's only tested offline so far. It also can't catch a query that runs but returns the wrong shape, which caused the one miss.
+
+---
+
 ## EXP-01 – Safety hardening
 
 **Goal:** make it impossible for the agent to change the database, and stop AI-generated code from affecting the app.
