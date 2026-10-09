@@ -331,8 +331,8 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 | v1.1 | Round 1: safety hardening and bug fixes | not measured² | – | – | – |
 | v1.2 | Evaluation baseline (47 SQL questions) | **89.4%** | **89.4%** | 4,959 | 6.5 s |
 | v2.0 | Round 2: schema context and SQL rules | **100%** | **100%** | 4,353 (−12%) | 6.3 s |
-| v2.0 | Same version on the **held-out set** (20 unseen questions) | **100%**³ | 95%⁴ | 4,335 | 5.5 s |
-| v2.1 | Round 3: clear refusals and self-correcting SQL | **99.3%**⁵ | **99.3%**⁵ | 4,432 (+2%) | 5.6 s |
+| v2.0 | Same version on the **held-out set** (20 unseen questions) | **100%** | 95%⁴ | 4,335 | 5.5 s |
+| v2.1 | Round 3: clear refusals and self-correcting SQL | **99.3%** | **99.3%** | 4,432 (+2%) | 5.6 s |
 | v2.1 | Same version on the **held-out set** | **100%** | **100%** | 4,413 | 5.6 s |
 
 ¹ The SQL agent crashed on every question (an invalid `reasoning_effort` setting) until Round 1.
