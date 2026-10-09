@@ -8,6 +8,9 @@ Ask questions about your data in plain English, and let a team of AI agents answ
 |:---:|:---:|:---:|:---:|
 | **89.4% → 99.3%** | **100%** | **0 / 7** | **7 / 7** |
 
+<!-- Demo: record a short screen capture of the app, save it as docs/demo.gif and uncomment the next line -->
+<!-- ![Demo of the AI Data Agent chat app](docs/demo.gif) -->
+
 ---
 
 ## Contents
@@ -40,6 +43,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 - A 59-question evaluation harness with execution accuracy and LLM-as-a-judge scoring.
 - Accuracy raised from 89.4% to 99.3% (average of 3 runs) on 47 SQL questions, and 100% on 20 held-out questions.
 - Measured, documented improvement rounds: each change is evaluated before and after.
+- A Streamlit chat app that shows the answer, an automatic chart, the data and the exact SQL that was run.
 
 ---
 
@@ -98,6 +102,14 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 
 ## 3. Features
 
+### Chat app
+- Ask questions in a chat interface (`uv run streamlit run app.py`).
+- Each answer shows which agent handled it, plus a badge when a request was refused or a query was self-corrected.
+- Live progress while the agent works: understanding the question, writing SQL, safety check, running the query.
+- **Automatic charts:** a single number becomes a headline metric, a breakdown becomes a bar chart (in the query's order), and a time series becomes a line chart. Lists of records stay as a table. When a result has several numbers (e.g. total rides and cancellation rate), you can choose which one to chart.
+- The result table and the exact SQL behind every answer, so answers can be checked.
+- Time and token usage for each answer, and example questions in the sidebar.
+
 ### SQL Analyst
 - Converts natural-language questions into PostgreSQL.
 - Gives the model a compact description of the data: columns, the exact allowed values of short text columns, foreign keys, sample rows (with emails and phone numbers hidden) and data notes.
@@ -153,7 +165,7 @@ python -m venv .venv
 # macOS / Linux
 source .venv/bin/activate
 
-pip install dotenv ipython langchain langchain-anthropic langgraph pandas psycopg2-binary pydantic requests sqlglot pyarrow
+pip install dotenv ipython langchain langchain-anthropic langgraph pandas psycopg2-binary pydantic requests sqlglot pyarrow streamlit
 ```
 
 </details>
@@ -204,6 +216,16 @@ uv run utils/feed_db.py
 
 ### 5. Ask questions
 
+**Chat app (recommended):**
+
+```bash
+uv run streamlit run app.py
+```
+
+It opens in your browser at `http://localhost:8501`.
+
+**From the command line:**
+
 ```bash
 uv run main.py                     # full system (router → agent)
 uv run agents/sql_analyst.py       # SQL agent only
@@ -213,14 +235,12 @@ uv run agents/etl_analyst.py       # ETL agent only
 From Python:
 
 ```python
-from agents.data_agent import data_agent
-from langchain_core.messages import HumanMessage
+from agents.service import ask
 
-response = data_agent.invoke({
-    "messages": [HumanMessage(content="Which 5 drivers have the highest average rating?")],
-    "route_response": "",
-})
-print(response["messages"][-1].content)
+reply = ask("Which 5 drivers have the highest average rating?")
+print(reply.answer)   # plain-English answer
+print(reply.sql)      # the SQL that was run
+print(reply.rows)     # the result rows
 ```
 
 **Example requests**
@@ -367,8 +387,8 @@ Safety stayed at 4/4 (nothing executed) and routing at 8/8 in every version. Cle
 - [ ] Compare a decision model (e.g. Jev) with Sonnet for routing
 
 **Features**
-- [ ] Streamlit chat interface with the answer, generated SQL and result table
-- [ ] Automatic charts for query results
+- [x] Streamlit chat interface with the answer, generated SQL and result table
+- [x] Automatic charts for query results
 - [ ] Load transformed data into PostgreSQL with human approval
 - [ ] Pagination and authentication for API extraction
 
@@ -398,13 +418,15 @@ AI-Data-Agent/
 ├── agents/
 │   ├── data_agent.py        # Router
 │   ├── sql_analyst.py       # Question → SQL → answer pipeline
-│   └── etl_analyst.py       # Tool-calling agent for extract/transform
+│   ├── etl_analyst.py       # Tool-calling agent for extract/transform
+│   └── service.py           # ask(): routes a request and returns answer, SQL, rows, steps
 ├── Models/
 │   └── schema.py            # Pydantic state models
 ├── utils/
 │   ├── database.py          # Read-only connection, schema context, query runner
 │   ├── schema_notes.py      # Agent tables and data notes for the LLM
 │   ├── sql_guard.py         # Rule-based read-only check
+│   ├── charts.py            # Picks a chart (metric, bar, line or none) for a result
 │   ├── etl_tools.py         # API extraction, file reading, isolated code execution
 │   ├── feed_db.py           # Creates tables and loads the dataset
 │   └── llm_pick.py          # Model per step
@@ -416,13 +438,14 @@ AI-Data-Agent/
 ├── docs/
 │   └── experiments.md       # Experiment log: changes, hypotheses, results
 ├── data/                    # Dataset and ETL outputs
+├── app.py                   # Streamlit chat app
 ├── main.py                  # Example request through the router
 ├── .env.example             # Template for .env
 ├── pyproject.toml
 └── uv.lock
 ```
 
-**Tech stack:** LangGraph, LangChain, Claude (Haiku, Sonnet), PostgreSQL (`psycopg2`), `sqlglot`, pandas, Pydantic, uv.
+**Tech stack:** LangGraph, LangChain, Claude (Haiku, Sonnet), PostgreSQL (`psycopg2`), `sqlglot`, pandas, Pydantic, Streamlit, Altair, uv.
 
 ---
 
@@ -438,6 +461,8 @@ AI-Data-Agent/
 | 400 error mentioning `temperature` | Claude Sonnet 5 and Opus 5 don't accept a custom temperature; remove it from `utils/llm_pick.py` |
 | Duplicate key error when loading data | Data is already loaded; uncomment the `TRUNCATE` block to reload |
 | `ModuleNotFoundError` | Run from the project root with `uv run` |
+| App shows "The app needs these settings" | Add the listed values to `.env` in the project root, then refresh the page |
+| `streamlit: command not found` | Run `uv sync`, then start it with `uv run streamlit run app.py` |
 | Query rejected as unsafe | The agent only runs read-only `SELECT` queries |
 | `Path must be inside the data/ folder` | Use paths under `data/` |
 | `ran longer than 60 seconds and was stopped` | Split the transformation, or raise `CODE_TIMEOUT_SECONDS` in `utils/etl_tools.py` |
