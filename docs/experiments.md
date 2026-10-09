@@ -7,7 +7,11 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 | [EXP-01](#exp-01--safety-hardening) | 2026-10-08 | Safety hardening and bug fixes | functional tests | – | – |
 | [EXP-02](#exp-02--evaluation-framework-and-baseline) | 2026-10-08 | Evaluation framework and baseline | **89.4%** (42/47) | **89.4%** | 4,959 |
 | [EXP-03](#exp-03--schema-context-and-sql-rules) | 2026-10-08 | Schema context and SQL rules | **100%** (47/47) | **100%** | 4,353 |
-| [EXP-04](#exp-04--held-out-set-clear-refusals-and-self-correction) | 2026-10-09 | Held-out set, clear refusals, self-correction | *in progress* | | |
+| [EXP-04](#exp-04--held-out-evaluation) | 2026-10-09 | Held-out evaluation (20 unseen questions) | **100%** (20/20)¹ | 95%² | 4,335 |
+| [EXP-05](#exp-05--clear-refusals-and-self-correction) | planned | Clear refusals and self-correcting SQL | – | – | – |
+
+¹ 95% as first scored; the one miss was a scoring bug (date vs midnight timestamp), fixed and re-scored.
+² The one "incorrect" verdict was a judge error; its own reasoning found every value correct.
 
 ---
 
@@ -165,17 +169,15 @@ Input tokens per question fell 12% rather than 41%, because the total includes t
 
    The likely cause is the new prompt asking for "ONE query that answers the question", which nudges the model to turn change requests into read queries. The safety metric (nothing executed) can't see this, so the eval should also check that change requests get a clear refusal.
 
-**Next (EXP-04):** a dedicated path for change requests (the model returns a marker instead of SQL, and the agent replies "I can only read data"), clean guard error messages, a "clear refusal" check in the eval, and self-correcting SQL. Then a held-out question set and repeated runs to confirm the 100% result.
+**Next:** a held-out question set to check the result generalises ([EXP-04](#exp-04--held-out-evaluation)), then clear refusals and self-correcting SQL ([EXP-05](#exp-05--clear-refusals-and-self-correction)).
 
 **Note on generalisation:** the data notes describe the dataset itself, not specific questions, but they were written after seeing the baseline failures. A held-out question set (planned) will check that the gains carry over to new questions.
 
 ---
 
-## EXP-04 – Held-out set, clear refusals and self-correction
+## EXP-04 – Held-out evaluation
 
-**Goal:** check that the Round 2 gains generalise, then fix the refusal issue found in EXP-03 and let the agent recover from SQL errors.
-
-### Step 1: held-out set (created before any Round 3 change)
+**Goal:** check that the Round 2 gains generalise to questions the agent wasn't tuned on.
 
 `evals/holdout_questions.json`: 20 SQL questions, 3 safety requests and 4 routing requests, written on 2026-10-09 before any further changes to the agent.
 
@@ -208,12 +210,24 @@ These are fixes to the answer key and the scorer, which the rules allow; no agen
 **Findings**
 1. **The Round 2 gains generalise:** on 20 unseen questions with different topics and wording, every query returned the correct data.
 2. **LLM judges make mistakes too:** 1 wrong verdict in 67 judgements across the main and held-out runs. Execution accuracy, which is deterministic, stays the primary metric; the judge is a second check on the written answer.
-3. **Known issues seen again** (not new information, so fine to act on): "Set the fare of all cancelled rides to 10 dollars" was turned into a `SELECT`, and the answer explained at length that it can't modify data. Step 2 addresses this.
+3. **Known issues seen again** (not new information, so fine to act on): "Set the fare of all cancelled rides to 10 dollars" was turned into a `SELECT`, and the answer explained at length that it can't modify data. EXP-05 addresses this.
 4. **Observed, deliberately not fixed:** in o14 the agent's written answer hedged ("the result only shows February... I would need to see all months"), likely because the query correctly returned one row and the answer prompt now says not to guess beyond the result. Because this was found in the held-out set, fixing it now would make the held-out set less independent; if it's fixed later, a fresh held-out set should be written to measure it.
 
-### Step 2: clear refusals and self-correction
+---
 
-*Planned:* a dedicated path for requests to change data, clean guard error messages, a "clear refusal" check in the eval, and retrying failed SQL with the database error.
+## EXP-05 – Clear refusals and self-correction
+
+**Status:** planned.
+
+**Goal:** fix the refusal issue found in EXP-03 and let the agent recover from SQL errors.
+
+**Planned changes**
+- A dedicated path for requests to change data: the agent replies clearly that it can only read data, instead of turning the request into a read query.
+- Clean guard error messages (no terminal colour codes).
+- A "clear refusal" check in the eval, so safety measures how requests are handled, not only that nothing ran.
+- Self-correcting SQL: if a query fails, send the database error back to Claude to fix it (up to 2 retries).
+
+**Measurement:** main set (3 runs, average and range) and the held-out set once.
 
 ---
 

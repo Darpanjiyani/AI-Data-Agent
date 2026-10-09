@@ -1,0 +1,100 @@
+{
+  "run_at": "2026-10-09T01:30:26",
+  "question_set": "holdout",
+  "options": {
+    "set": "holdout",
+    "limit": null,
+    "ids": [
+      "o11",
+      "o14"
+    ],
+    "category": null,
+    "no_judge": false,
+    "skip_safety": true,
+    "skip_routing": true
+  },
+  "sql": [
+    {
+      "id": "o11",
+      "category": "join",
+      "question": "What is the average rating given by riders from each province?",
+      "reference_result": "[{\"province\": \"QC\", \"avg\": \"4.4255050505050505\"}, {\"province\": \"BC\", \"avg\": \"4.4457912457912458\"}, {\"province\": \"AB\", \"avg\": \"4.4246432300730943\"}, {\"province\": \"MB\", \"avg\": \"4.4224529526281635\"}, {\"province\": \"ON\", \"avg\": \"4.4170723790976956\"}, {\"province\": \"NS\", \"avg\": \"4.4401114206128134\"}]",
+      "curated_question": "What is the average rating that riders from each province have given?",
+      "generated_sql": "SELECT u.province, AVG(r.rating) AS avg_rating_given\nFROM ratings r\nJOIN users u ON r.rider_id = u.user_id\nGROUP BY u.province;",
+      "is_safe": "Yes",
+      "safety_comments": "The query is a read-only SELECT statement that joins the ratings and users tables, groups by province, and computes an average rating. It contains no INSERT, UPDATE, DELETE, DROP, ALTER, or other data/schema-modifying commands, so it is safe for data retrieval purposes.",
+      "result": "[{\"province\": \"QC\", \"avg_rating_given\": \"4.4255050505050505\"}, {\"province\": \"BC\", \"avg_rating_given\": \"4.4457912457912458\"}, {\"province\": \"AB\", \"avg_rating_given\": \"4.4246432300730943\"}, {\"province\": \"MB\", \"avg_rating_given\": \"4.4224529526281635\"}, {\"province\": \"ON\", \"avg_rating_given\": \"4.4170723790976956\"}, {\"province\": \"NS\", \"avg_rating_given\": \"4.4401114206128134\"}]",
+      "final_answer": "# Average Rating Given by Riders by Province\n\nBased on the data, here are the average ratings that riders from each Canadian province have given:\n\n| Province | Average Rating |\n|----------|----------------|\n| British Columbia (BC) | 4.45 |\n| Nova Scotia (NS) | 4.44 |\n| Quebec (QC) | 4.43 |\n| Alberta (AB) | 4.42 |\n| Manitoba (MB) | 4.42 |\n| Ontario (ON) | 4.42 |\n\n**Key Insight:** Riders across all provinces give very similar average ratings, ranging from approximately 4.42 to 4.45 stars. British Columbia riders give the highest average rating at 4.45 stars, while Ontario riders give the lowest at 4.42 stars. The difference between the highest and lowest is minimal, suggesting consistent rating patterns across provinces.",
+      "seconds": 6.28,
+      "input_tokens": 4412,
+      "output_tokens": 447,
+      "execution_match": true,
+      "execution_reason": "Match.",
+      "answer_correct": true,
+      "judge_reason": "Comparing values: BC 4.4458 vs 4.45 (match), NS 4.4401 vs 4.44 (match), QC 4.4255 vs agent's 4.43 - this is off (correct is 4.4255, rounds to 4.43 only if rounding to 2 decimal places from 4.4255... actually 4.4255 rounds to 4.43 at 2 decimals? 4.4255 -> 4.43 yes since third decimal is 5, rounds up). AB 4.4246 vs 4.42 (match), MB 4.4225 vs 4.42 (match), ON 4.4171 vs 4.42 (match). All values match when properly rounded. The order/ranking commentary about highest/lowest is also consistent with correct values (BC highest, ON lowest). All six provinces present with correct values."
+    },
+    {
+      "id": "o14",
+      "category": "date",
+      "question": "Which month of 2025 had the fewest ride requests?",
+      "reference_result": "[{\"extract\": \"2\"}]",
+      "curated_question": "Which month in 2025 had the lowest number of ride requests?",
+      "generated_sql": "SELECT\n  DATE_TRUNC('month', requested_at) AS ride_month,\n  COUNT(*) AS ride_requests\nFROM rides\nWHERE requested_at >= '2025-01-01' AND requested_at < '2026-01-01'\nGROUP BY DATE_TRUNC('month', requested_at)\nORDER BY ride_requests ASC\nLIMIT 1;",
+      "is_safe": "Yes",
+      "safety_comments": "This SQL query is a read-only SELECT statement. It only retrieves data by grouping ride requests by month, counting them, filtering by date range, ordering, and limiting results. It does not contain any INSERT, UPDATE, DELETE, DROP, ALTER, or other data/schema modifying commands. The query is safe for data retrieval purposes.",
+      "result": "[{\"ride_month\": \"2025-02-01 00:00:00\", \"ride_requests\": 970}]",
+      "final_answer": "Based on the available data, **February 2025** had **970 ride requests**.\n\nHowever, I should note that this result only shows data for February 2025. To accurately answer which month in 2025 had the lowest number of ride requests, I would need to see ride request data for all months in 2025 to make a proper comparison.",
+      "seconds": 6.01,
+      "input_tokens": 4372,
+      "output_tokens": 410,
+      "execution_match": true,
+      "execution_reason": "Match (equivalent format).",
+      "answer_correct": true,
+      "judge_reason": "The correct answer is February (month 2), and the agent's answer identifies February 2025 as the month with fewest ride requests, matching the correct result. Although the agent adds a caveat about needing full data, it still provides the correct final answer (February) as the lowest month."
+    }
+  ],
+  "safety": [],
+  "routing": [],
+  "database_unchanged": true,
+  "table_counts": {
+    "before": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000
+    },
+    "after": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000
+    }
+  },
+  "summary": {
+    "execution_accuracy": 1.0,
+    "answer_accuracy": 1.0,
+    "avg_seconds": 6.145,
+    "avg_input_tokens": 4392.0,
+    "avg_output_tokens": 428.5,
+    "by_category": {
+      "join": {
+        "n": 1,
+        "exec": 1,
+        "ans": 1
+      },
+      "date": {
+        "n": 1,
+        "exec": 1,
+        "ans": 1
+      }
+    },
+    "lines": [
+      "Execution accuracy:  2/2 (100.0%)",
+      "Answer accuracy:     2/2 (100.0%)  (LLM judge)",
+      "Avg per question:    6.1s, 4,392 input + 428 output tokens",
+      "Database unchanged:  yes"
+    ]
+  }
+}

@@ -1,0 +1,111 @@
+{
+  "run_at": "2026-10-09T01:30:03",
+  "question_set": "main",
+  "options": {
+    "set": "main",
+    "limit": 3,
+    "ids": null,
+    "category": null,
+    "no_judge": false,
+    "skip_safety": true,
+    "skip_routing": true
+  },
+  "sql": [
+    {
+      "id": "s01",
+      "category": "simple",
+      "question": "How many users are there in total?",
+      "reference_result": "[{\"count\": 10000}]",
+      "curated_question": "What is the total count of users in the database?",
+      "generated_sql": "SELECT COUNT(*) AS total_user_count\nFROM users;",
+      "is_safe": "Yes",
+      "safety_comments": "The query is a simple SELECT COUNT(*) statement on the 'users' table. It only performs data retrieval and does not contain any data modification commands (INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, etc.). It does not alter the database structure or content in any way, making it safe to execute.",
+      "result": "[{\"total_user_count\": 10000}]",
+      "final_answer": "# Total User Count\n\nThe total count of users in the database is **10,000**.",
+      "seconds": 4.89,
+      "input_tokens": 4227,
+      "output_tokens": 232,
+      "execution_match": true,
+      "execution_reason": "Match.",
+      "answer_correct": true,
+      "judge_reason": "The agent's answer of 10,000 matches the verified reference result of count=10000."
+    },
+    {
+      "id": "s02",
+      "category": "simple",
+      "question": "How many drivers are registered?",
+      "reference_result": "[{\"count\": 3000}]",
+      "curated_question": "How many driver records are currently stored in the database?",
+      "generated_sql": "SELECT COUNT(*) AS driver_count\nFROM users\nWHERE user_type = 'driver';",
+      "is_safe": "Yes",
+      "safety_comments": "The query is a simple SELECT statement using COUNT(*) to retrieve the number of rows where user_type = 'driver'. It does not contain any data modification commands (INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, etc.), nor does it alter database structure or content. It is a read-only operation and is safe to execute.",
+      "result": "[{\"driver_count\": 3000}]",
+      "final_answer": "# Answer\n\nThere are currently **3,000 driver records** stored in the database.",
+      "seconds": 4.66,
+      "input_tokens": 4239,
+      "output_tokens": 254,
+      "execution_match": true,
+      "execution_reason": "Match.",
+      "answer_correct": true,
+      "judge_reason": "The agent reported 3,000 driver records, matching the verified count of 3000."
+    },
+    {
+      "id": "s03",
+      "category": "simple",
+      "question": "How many rides were cancelled?",
+      "reference_result": "[{\"count\": 1925}]",
+      "curated_question": "How many rides in the database have a status of cancelled?",
+      "generated_sql": "SELECT COUNT(*) AS cancelled_ride_count\nFROM rides\nWHERE status = 'cancelled';",
+      "is_safe": "Yes",
+      "safety_comments": "The query is a read-only SELECT statement using COUNT(*) with a WHERE clause filter. It does not contain any data modification commands (INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, etc.) and poses no risk to the database structure or content. It is safe for data retrieval purposes.",
+      "result": "[{\"cancelled_ride_count\": 1925}]",
+      "final_answer": "Based on the database query results, there are **1,925 rides** with a status of cancelled in the database.",
+      "seconds": 4.39,
+      "input_tokens": 4250,
+      "output_tokens": 258,
+      "execution_match": true,
+      "execution_reason": "Match.",
+      "answer_correct": true,
+      "judge_reason": "The agent's answer states 1,925 cancelled rides, which matches the verified reference result of 1925."
+    }
+  ],
+  "safety": [],
+  "routing": [],
+  "database_unchanged": true,
+  "table_counts": {
+    "before": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000
+    },
+    "after": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000
+    }
+  },
+  "summary": {
+    "execution_accuracy": 1.0,
+    "answer_accuracy": 1.0,
+    "avg_seconds": 4.646666666666667,
+    "avg_input_tokens": 4238.666666666667,
+    "avg_output_tokens": 248.0,
+    "by_category": {
+      "simple": {
+        "n": 3,
+        "exec": 3,
+        "ans": 3
+      }
+    },
+    "lines": [
+      "Execution accuracy:  3/3 (100.0%)",
+      "Answer accuracy:     3/3 (100.0%)  (LLM judge)",
+      "Avg per question:    4.6s, 4,239 input + 248 output tokens",
+      "Database unchanged:  yes"
+    ]
+  }
+}
