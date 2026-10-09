@@ -327,11 +327,11 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 
 | Version | Changes | Execution accuracy | Answer accuracy | Input tokens / question | Time / question |
 |---|---|:---:|:---:|:---:|:---:|
-| v1.0 | Original multi-agent system | not measured¹ | – | – | – |
-| v1.1 | Round 1: safety hardening and bug fixes | not measured² | – | – | – |
+| v1.0 | Original multi-agent system | not measured | – | – | – |
+| v1.1 | Round 1: safety hardening and bug fixes | not measured | – | – | – |
 | v1.2 | Evaluation baseline (47 SQL questions) | **89.4%** | **89.4%** | 4,959 | 6.5 s |
 | v2.0 | Round 2: schema context and SQL rules | **100%** | **100%** | 4,353 (−12%) | 6.3 s |
-| v2.0 | Same version on the **held-out set** (20 unseen questions) | **100%** | 95%⁴ | 4,335 | 5.5 s |
+| v2.0 | Same version on the **held-out set** (20 unseen questions) | **100%** | 95% | 4,335 | 5.5 s |
 | v2.1 | Round 3: clear refusals and self-correcting SQL | **99.3%** | **99.3%** | 4,432 (+2%) | 5.6 s |
 | v2.1 | Same version on the **held-out set** | **100%** | **100%** | 4,413 | 5.6 s |
 
