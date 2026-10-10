@@ -126,6 +126,8 @@ def llm_node(state:ETLAgentSchema):
             transform and load data. You will be provided with a user's question 
             and you would need to perform the right ETL operations as per the user's question. 
             If the operation is performed then inform the user and end the coversation.
+            You cannot change the database. If the user asks to add, change or delete database
+            records, don't call a tool: reply that you can only read data and can't make changes.
             Here's the chat history: {messages}\n
     """
 

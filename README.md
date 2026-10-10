@@ -4,9 +4,9 @@ Ask questions about your data in plain English, and let a team of AI agents answ
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue) ![LangGraph](https://img.shields.io/badge/LangGraph-multi--agent-purple) ![Claude](https://img.shields.io/badge/LLM-Claude-orange) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-read--only-336791)
 
-| Execution accuracy (47 questions, avg of 3 runs) | Held-out set (20 unseen questions) | Unsafe requests executed | Change requests clearly refused |
+| Execution accuracy (47 questions, avg of 3 runs) | Held-out set (20 unseen questions) | Follow-up conversations (32) | Change requests executed |
 |:---:|:---:|:---:|:---:|
-| **89.4% → 99.3%** | **100%** | **0 / 7** | **7 / 7** |
+| **89.4% → 99.3%** | **100%** | **100%** | **0 / 17**, all clearly refused |
 
 ![Demo: a question answered with a chart, the data and the SQL that ran, then a delete request refused](docs/demo.gif)
 
@@ -40,6 +40,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 - Three independent layers of SQL safety; unsafe requests are never executed.
 - A 59-question evaluation harness with execution accuracy and LLM-as-a-judge scoring.
 - Accuracy raised from 89.4% to 99.3% (average of 3 runs) on 47 SQL questions, and 100% on 20 held-out questions.
+- Conversation memory: follow-ups like "and in 2026?" or "how many rides did the top one take?" answered correctly in all 32 test conversations, and follow-up requests to change data ("delete them") refused.
 - Measured, documented improvement rounds: each change is evaluated before and after.
 - A Streamlit chat app that shows the answer, an automatic chart, the data and the exact SQL that was run.
 
@@ -85,8 +86,8 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 
 | Level | Model | Used for |
 |---|---|---|
-| `low` | Claude Haiku | Rewriting the question, writing the final answer |
-| `medium` | Claude Sonnet | Generating SQL, safety judge, eval judge |
+| `low` | Claude Haiku | Rewriting a standalone question, writing the final answer |
+| `medium` | Claude Sonnet | Rewriting a follow-up in context, generating SQL, safety judge, eval judge |
 | `claude` | Claude Sonnet | Router, ETL agent, pandas code generation |
 | `high` | Claude Opus | Defined, not used yet |
 
@@ -113,13 +114,13 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 
 ### SQL Analyst
 - Converts natural-language questions into PostgreSQL.
-- Understands follow-ups: the last 3 exchanges are used to rewrite a message like "and in 2026?" into a standalone question, so the SQL rules and safety checks work exactly as for a single question. A follow-up that asks to change data ("delete them") is never executed.
+- Understands follow-ups: the last 3 exchanges are used to rewrite a message like "and in 2026?" into a standalone question, so the SQL rules and safety checks work exactly as for a single question. A follow-up that asks to change data ("delete them", "set their fares to zero") is rewritten to name the exact records and refused (16 of 16 in the latest runs).
 - Gives the model a compact description of the data: columns, the exact allowed values of short text columns, foreign keys, sample rows (with emails and phone numbers hidden) and data notes.
 - Follows explicit rules for row limits, filters, percentages and "has none" questions.
 - Blocks anything that isn't a single read-only query, then runs it as a read-only database user.
 - Refuses requests to change data with a clear explanation instead of attempting them.
-- Recovers from its own mistakes: if a query fails, the database error goes back to Claude, which rewrites the query (up to 2 retries, each re-checked for safety).
-- Returns results with column names and explains them in plain English.
+- Recovers from its own mistakes: if a query fails, or the guard can't parse it (a typo such as `SELECE`), the error goes back to Claude, which rewrites the query (up to 2 retries, each re-checked for safety).
+- Returns results with column names and explains them in plain English. The answer step also sees the SQL, so it knows when a result is already sorted and cut to the top row and can state it directly.
 
 ### ETL Analyst
 - Extracts JSON from REST APIs and saves it as CSV, JSON or Parquet.
@@ -317,6 +318,8 @@ uv run evals/run_eval.py --ids s01 t01       # specific questions
 uv run evals/run_eval.py --no-judge          # skip the LLM judge (cheaper)
 uv run evals/run_eval.py --set holdout       # held-out questions (see below)
 uv run evals/run_followup_eval.py            # follow-up conversations (see below)
+uv run evals/run_followup_eval.py --set fresh   # fresh follow-up conversations (EXP-07)
+uv run evals/run_followup_eval.py --set check   # final check conversations (EXP-07)
 ```
 
 Each run writes a Markdown report (summary, per-question results, and every failure with its generated SQL) and a JSON file to `evals/results/`.
@@ -325,7 +328,7 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 `evals/holdout_questions.json` holds 27 more questions (20 SQL, 3 safety, 4 routing) in different wording and on different topics. They were written before Round 3 and are **never used to design fixes**: they're run only to check that improvements carry over to questions the agent wasn't tuned on.
 
 ### Follow-up conversations
-`evals/followup_questions.json` holds 14 short conversations (2 or 3 turns) and 3 safety conversations. They are sent turn by turn in one chat, through the router, memory and SQL agent, and only the last turn is scored, with the same execution and judge checks. They cover changing a time period or filter, narrowing a result, using a value from an earlier answer ("the top one", "there"), a topic switch where nothing should carry over, and follow-ups that ask to change data, which must be refused. The report shows how each follow-up was understood.
+`evals/followup_questions.json` holds 14 short conversations (2 or 3 turns) and 3 safety conversations. They are sent turn by turn in one chat, through the router, memory and SQL agent, and only the last turn is scored, with the same execution and judge checks. They cover changing a time period or filter, narrowing a result, using a value from an earlier answer ("the top one", "there"), a topic switch where nothing should carry over, and follow-ups that ask to change data, which must be refused. The report shows how each follow-up was understood. `evals/followup_fresh_questions.json` adds 12 more conversations and 4 safety conversations, written before the EXP-07 fixes, to measure those fixes on conversations they weren't designed around. `evals/followup_check_questions.json` (6 conversations, 3 safety) was written before the second part of EXP-07 for the same reason.
 
 ### Keeping it honest
 - The eval is only changed when an answer key or a question's wording is wrong, never to raise the score.
@@ -348,6 +351,9 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 | v2.1 | Same version on the **held-out set** | **100%** | **100%** | 4,413 | 5.6 s |
 | v2.2 | Round 5: conversation memory, **follow-up conversations** (14, 3 runs) | **100%** | 92.9% | 5,509 per follow-up turn | 8.1 s |
 | v2.2 | Same version, main set (regression check, 1 run) | 97.9% | 97.9% | 4,403 | 6.3 s |
+| v2.3 | Round 6: clear refusals for vague follow-ups, confident top-1 answers, retry on invalid SQL (**check set**, 6 new conversations, 3 runs) | **100%** | **100%** | 5,792 per follow-up turn | 6.7 s |
+| v2.3 | Same version, main set | **100%** | **100%** | 4,568 | 5.6 s |
+| v2.3 | Same version, held-out set | **100%** | **100%** | 4,546 | 5.5 s |
 
 Results by category, notes on each number, and the caveats are in [docs/experiments.md](docs/experiments.md#results-by-version); every round has its own write-up there.
 
@@ -361,7 +367,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - [x] Isolated, time-limited execution for generated ETL code
 - [x] Personal columns hidden from the LLM
 - [ ] Run generated ETL code in a container
-- [ ] Clear refusals for vague follow-up change requests ("remove those drivers")
+- [x] Clear refusals for vague follow-up change requests ("remove those drivers")
 
 **Accuracy**
 - [x] Query results with column names
@@ -372,10 +378,11 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - [x] Self-correcting SQL: retry with the database error
 - [x] Conversation memory with a LangGraph checkpointer
 - [x] Held-out evaluation questions
+- [ ] A fresh held-out set for single questions (the first one has informed a fix since EXP-07)
 - [x] Repeated eval runs to measure run-to-run variance
 - [ ] Result sanity checks (e.g. a "how many" question should return one row)
-- [ ] Retry when the guard finds invalid SQL, not only on database errors
-- [ ] Show the SQL to the answer step, so a top-1 result is stated confidently
+- [x] Retry when the guard finds invalid SQL, not only on database errors
+- [x] Show the SQL to the answer step, so a top-1 result is stated confidently
 
 **Cost and speed**
 - [x] Schema built once per process; SQL prompt 41% smaller
@@ -431,6 +438,8 @@ AI-Data-Agent/
 │   ├── questions.json       # Evaluation questions with reference SQL
 │   ├── holdout_questions.json  # Held-out questions, never used to design fixes
 │   ├── followup_questions.json # Multi-turn conversations for conversation memory
+│   ├── followup_fresh_questions.json # Fresh conversations, written before the EXP-07 fixes
+│   ├── followup_check_questions.json # Final check conversations for EXP-07 part 2
 │   ├── run_followup_eval.py # Scores follow-up conversations
 │   ├── run_eval.py          # Scores the agent and writes reports
 │   └── results/             # Reports from each run

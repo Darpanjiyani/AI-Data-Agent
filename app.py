@@ -32,6 +32,7 @@ EXAMPLES = [
 REFUSAL_LABELS = {
     "write_request": "Refused: change request",
     "guard": "Refused: SQL guard",
+    "invalid_sql": "Couldn't write a valid query",
     "judge": "Refused: safety review",
 }
 

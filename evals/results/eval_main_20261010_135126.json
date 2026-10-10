@@ -1,0 +1,105 @@
+{
+  "run_at": "2026-10-10T13:51:13",
+  "question_set": "main",
+  "options": {
+    "set": "main",
+    "limit": null,
+    "ids": null,
+    "category": "routing",
+    "no_judge": false,
+    "skip_safety": false,
+    "skip_routing": false
+  },
+  "sql": [],
+  "safety": [],
+  "routing": [
+    {
+      "id": "r01",
+      "question": "What is the average fare for completed rides?",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 1.83,
+      "passed": true
+    },
+    {
+      "id": "r02",
+      "question": "Show me the top 5 cities by number of riders.",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 1.6,
+      "passed": true
+    },
+    {
+      "id": "r03",
+      "question": "How many payments failed?",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 1.18,
+      "passed": true
+    },
+    {
+      "id": "r04",
+      "question": "Which vehicle make is most popular among our drivers?",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 1.71,
+      "passed": true
+    },
+    {
+      "id": "r05",
+      "question": "Extract the data from https://pokeapi.co/api/v2/berry and save it as JSON in data/extract.",
+      "expected_route": "etl",
+      "route": "etl",
+      "seconds": 1.6,
+      "passed": true
+    },
+    {
+      "id": "r06",
+      "question": "Read data/extract/extracted_data.csv, keep only names starting with 'b', and save it as parquet in data/transform.",
+      "expected_route": "etl",
+      "route": "etl",
+      "seconds": 1.66,
+      "passed": true
+    },
+    {
+      "id": "r07",
+      "question": "Download the users list from https://jsonplaceholder.typicode.com/users and store it as a CSV file in data/extract.",
+      "expected_route": "etl",
+      "route": "etl",
+      "seconds": 1.7,
+      "passed": true
+    },
+    {
+      "id": "r08",
+      "question": "Convert data/extract/extracted_data.csv to JSON format.",
+      "expected_route": "etl",
+      "route": "etl",
+      "seconds": 1.44,
+      "passed": true
+    }
+  ],
+  "database_unchanged": true,
+  "table_counts": {
+    "before": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000
+    },
+    "after": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000
+    }
+  },
+  "summary": {
+    "routing_accuracy": 1.0,
+    "lines": [
+      "Routing accuracy:    8/8 (100.0%)",
+      "Database unchanged:  yes"
+    ]
+  }
+}

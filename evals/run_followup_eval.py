@@ -14,6 +14,7 @@ wrong reading is easy to see.
 
 Usage (from the project root):
   uv run evals/run_followup_eval.py
+  uv run evals/run_followup_eval.py --set fresh   # fresh conversations (EXP-07)
   uv run evals/run_followup_eval.py --ids f01 f07
   uv run evals/run_followup_eval.py --no-judge
 """
@@ -35,7 +36,13 @@ from utils.database import DatabaseUtil, reader_connection_details
 from utils.llm_pick import pick_llm
 from utils.sql_guard import is_read_only
 
-QUESTIONS_FILE = PROJECT_ROOT / "evals" / "followup_questions.json"
+QUESTION_SETS = {
+    "followup": PROJECT_ROOT / "evals" / "followup_questions.json",
+    # Fresh set written before the EXP-07 fixes; measures them on conversations they weren't designed around
+    "fresh": PROJECT_ROOT / "evals" / "followup_fresh_questions.json",
+    # Final check set written before the routing / topic-switch fixes that followed the first EXP-07 runs
+    "check": PROJECT_ROOT / "evals" / "followup_check_questions.json",
+}
 
 
 def run_conversation(ask, conversation_id: str, turns: list, stamp: str) -> list:
@@ -99,12 +106,14 @@ def score_conversation(conversation: dict, last: dict, db, judge) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate follow-up questions (conversation memory).")
+    parser.add_argument("--set", choices=sorted(QUESTION_SETS), default="followup",
+                        help="Which conversation set to run: followup (default), fresh or check.")
     parser.add_argument("--ids", nargs="+", help="Only run these conversation ids.")
     parser.add_argument("--no-judge", action="store_true", help="Skip the LLM-as-judge answer check.")
     parser.add_argument("--skip-safety", action="store_true", help="Skip the safety conversations.")
     args = parser.parse_args()
 
-    data = json.loads(QUESTIONS_FILE.read_text(encoding="utf-8"))
+    data = json.loads(QUESTION_SETS[args.set].read_text(encoding="utf-8"))
     conversations = data["conversations"]
     safety_conversations = [] if args.skip_safety else data["safety_conversations"]
     if args.ids:
@@ -120,7 +129,7 @@ def main():
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     counts_before = table_counts(db)
-    report = {"run_at": datetime.now().isoformat(timespec="seconds"), "options": vars(args),
+    report = {"run_at": datetime.now().isoformat(timespec="seconds"), "question_set": args.set, "options": vars(args),
               "conversations": [], "safety": []}
 
     for n, conversation in enumerate(conversations, 1):
@@ -165,8 +174,8 @@ def main():
     report["summary"] = build_summary(report, judge is not None)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    json_path = RESULTS_DIR / f"eval_followup_{stamp}.json"
-    md_path = RESULTS_DIR / f"eval_followup_{stamp}.md"
+    json_path = RESULTS_DIR / f"eval_{args.set}_{stamp}.json"
+    md_path = RESULTS_DIR / f"eval_{args.set}_{stamp}.md"
     json_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     md_path.write_text(build_markdown(report, judge is not None), encoding="utf-8")
 
@@ -208,17 +217,18 @@ def build_summary(report, judged: bool) -> dict:
 
 
 def build_markdown(report, judged: bool) -> str:
-    md = ["# Evaluation report (follow-up conversations)", "", f"Run at {report['run_at']}", "", "## Summary", ""]
+    md = [f"# Evaluation report (follow-up conversations, {report['question_set']} set)", "",
+          f"Run at {report['run_at']}", "", "## Summary", ""]
     md += [f"- {line}" for line in report["summary"]["lines"]]
 
     if report["conversations"]:
         md += ["", "## Conversations", "", "Only the last turn is scored.", "",
-               "| ID | Kind | Last message | Understood as | Execution | " + ("Answer |" if judged else ""),
-               "|---|---|---|---|---|" + ("---|" if judged else "")]
+               "| ID | Kind | Last message | Understood as | Agent | Execution | " + ("Answer |" if judged else ""),
+               "|---|---|---|---|---|---|" + ("---|" if judged else "")]
         for e in report["conversations"]:
             last = (e.get("turn_records") or [{}])[-1]
             row = (f"| {e['id']} | {e['kind']} | {e['turns'][-1]} | {last.get('understood_as', '-')} | "
-                   f"{'✅' if e['execution_match'] else '❌'} |")
+                   f"{last.get('route', '-')} | {'✅' if e['execution_match'] else '❌'} |")
             if judged:
                 row += f" {'✅' if e.get('answer_correct') else '❌'} |"
             md.append(row)
@@ -243,11 +253,12 @@ def build_markdown(report, judged: bool) -> str:
 
     if report["safety"]:
         md += ["", "## Safety conversations", "",
-               "| ID | Turns | Understood as | Not executed | Clearly refused |", "|---|---|---|---|---|"]
+               "| ID | Turns | Understood as | Agent | Not executed | Clearly refused |", "|---|---|---|---|---|---|"]
         for e in report["safety"]:
             last = (e.get("turn_records") or [{}])[-1]
             md.append(f"| {e['id']} | {' → '.join(e['turns'])} | {last.get('understood_as', '-')} | "
-                      f"{'✅' if e['passed'] else '❌'} | {'✅' if e.get('clearly_refused') else '❌'} |")
+                      f"{last.get('route', '-')} | {'✅' if e['passed'] else '❌'} | "
+                      f"{'✅' if e.get('clearly_refused') else '❌'} |")
     return "\n".join(md) + "\n"
 
 

@@ -366,6 +366,7 @@ def main():
             blocked_by = {
                 "write_request": "refused as a change request",
                 "guard": "sql_guard",
+                "invalid_sql": "sql_guard (invalid SQL)",
                 "judge": "llm_judge",
             }.get(run.get("refusal_type", ""), "not refused (agent wrote a read-only query)")
             if run["is_safe"] != "Yes" and not run.get("refusal_type"):

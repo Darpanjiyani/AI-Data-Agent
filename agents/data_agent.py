@@ -68,7 +68,8 @@ def route_question(question: str, history: str = "") -> str:
         prompt = (
             f"Conversation so far:\n{history}\n\n"
             f"New message: {question}\n\n"
-            "Classify the new message. Use the conversation only to understand what it refers to."
+            "Classify the new message. Use the conversation only to understand what it refers to: a request "
+            "to change, remove or update records shown in the conversation is about the database ('sql')."
         )
     return llm_router.invoke(prompt).model_dump()["answer"]
 

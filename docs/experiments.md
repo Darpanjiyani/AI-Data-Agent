@@ -10,11 +10,13 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 | [EXP-04](#exp-04--held-out-evaluation) | 2026-10-09 | Held-out evaluation (20 unseen questions) | **100%** (20/20)¹ | 95%² | 4,335 |
 | [EXP-05](#exp-05--clear-refusals-and-self-correction) | 2026-10-09 | Clear refusals and self-correcting SQL | **99.3%** (3-run avg)³; held-out **100%** | **99.3%** | 4,432 |
 | [EXP-06](#exp-06--conversation-memory) | 2026-10-10 | Conversation memory (follow-up questions) | follow-ups **100%** (42/42)⁴; main 97.9% | follow-ups 92.9% | 5,509 per follow-up turn |
+| [EXP-07](#exp-07--clear-follow-up-refusals-confident-answers-retry-on-invalid-sql) | 2026-10-10 | Clear follow-up refusals, confident top-1 answers, retry on invalid SQL | check set **100%** (18/18)⁵; fresh, follow-up, main and held-out **100%** | **100%** on every set | 5,792 per follow-up turn |
 
 ¹ 95% as first scored; the one miss was a scoring bug (date vs midnight timestamp), fixed and re-scored.
 ² The one "incorrect" verdict was a judge error; its own reasoning found every value correct.
 ³ Main set run 3 times: 100%, 100% and 97.9% (140/141 question runs correct).
 ⁴ 14 follow-up conversations run 3 times; only the last turn of each is scored. The main set was run once as a regression check.
+⁵ Final version: check set run 3 times; fresh and original follow-up sets once; main and held-out sets once after part 1 (part 2 doesn't change single-question SQL) and routing re-checked after part 2. All 16 follow-up change requests were clearly refused.
 
 ---
 
@@ -367,7 +369,82 @@ The filtering logic is right, but the `COUNT` sits in the same query as `GROUP B
 4. **Single questions held.** The main set scored 97.9%, inside the EXP-05 range (97.9% to 100%). The miss was h06 again, for a new reason: the generated SQL had a typo (`SELECE`), the guard blocked it as invalid SQL, and the user got a refusal. Self-correction only retries database errors, so a query the guard can't parse never gets a second try.
 5. **Cost of memory:** about 1,100 more input tokens (+24%) per follow-up turn, from the history in the rewrite and router prompts. Time per follow-up turn was 8.1 s, though time also varies with API load.
 
-**Next (EXP-07, planned):** three general fixes. The rewrite step must spell out what a change request refers to; the answer step sees the SQL, so it knows when a result is already the top row; and invalid SQL caught by the guard gets the same retry as a database error. Findings 2 and 3 came from the follow-up set, so a fresh set of follow-up conversations will be written before the fixes are tested, to keep the measurement independent.
+**Next ([EXP-07](#exp-07--clear-follow-up-refusals-confident-answers-retry-on-invalid-sql)):** three general fixes. The rewrite step must spell out what a change request refers to; the answer step sees the SQL, so it knows when a result is already the top row; and invalid SQL caught by the guard gets the same retry as a database error. Findings 2 and 3 came from the follow-up set, so a fresh set of follow-up conversations will be written before the fixes are tested, to keep the measurement independent.
+
+---
+
+## EXP-07 – Clear follow-up refusals, confident answers, retry on invalid SQL
+
+**Goal:** fix the three issues found in [EXP-06](#exp-06--conversation-memory), with general changes, and measure them on conversations they weren't designed around.
+
+**Fresh test set first.** Two of the issues came from the follow-up set, so `evals/followup_fresh_questions.json` was written and its reference queries checked *before* any fix was made: 12 conversations (new topics, three more "which is the most / least" follow-ups, a value from an earlier answer, a topic switch) and 4 safety conversations whose follow-ups are vague change requests ("Remove them.", "Set their fares to zero.", "Get rid of those records.", "Activate all of them.").
+
+**Changes**
+
+| # | Issue in EXP-06 | Change | File |
+|---|---|---|---|
+| 1 | Vague change requests ("Remove those drivers from the database.") reached the SQL step without saying which records, and weren't refused | The rewrite step spells out which records a change request refers to, and SQL rule 8 refuses change requests even when they don't say which records ("remove" added to the verbs) | `agents/sql_analyst.py` |
+| 2 | A correct top-1 result was answered with "I'd need more data" | The answer step sees the SQL and is told that a sorted, limited result already is the answer to a "which is the most / least" question | `agents/sql_analyst.py` |
+| 3 | A typo (`SELECE`) caught by the guard ended in a refusal | When the guard can't parse something that is clearly an attempt at a query (it starts with `SEL...` or `WITH`), it goes to the same fix-and-retry step as a database error, within the same limit of 2 retries. Prose that isn't a query is still refused straight away | `agents/sql_analyst.py`, `evals/run_eval.py`, `app.py` |
+
+**Offline checks (stand-in model)**
+- A query with `SELECE` is sent back with the guard's error, rewritten and run (1 retry); one that stays invalid stops after exactly 2 retries with the clear "couldn't write a valid query" message; prose is refused with no retry; database errors still retry as before.
+- The answer step's prompt contains the final SQL; rule 8 and the rewrite prompt contain the new wording.
+- All four sets run end to end: main 47/47 (and 44/47 with three deliberate mistakes, which the scorer catches), follow-up 14/14, fresh 12/12, all change requests refused.
+
+**What changes for single questions:** fixes 2 and 3 and the rule 8 wording apply to every question, so the main and held-out sets are re-run as regression checks.
+
+**Independence note:** fix 2 also addresses the hedged answer seen in held-out question o14 ([EXP-04](#exp-04--held-out-evaluation)), and fixes 1 and 2 address issues found in the original follow-up set. Those two sets have now shaped a fix, so their re-runs show whether the fixes work; the fresh set is the independent measure. A new held-out set for single questions goes on the roadmap.
+
+**Results, part 1** (2026-10-10: fresh set 3 times, original follow-up set, main set and held-out set once each)
+
+| Metric | EXP-06 | Fresh (3 runs) | Original follow-ups | Main | Held-out |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Execution accuracy | follow-ups 100%, main 97.9% | 91.7% (33/36) | 100% (14/14) | **100%** (47/47) | **100%** (20/20) |
+| Answer accuracy (LLM judge) | follow-ups 92.9%, main 97.9% | 91.7% (33/36) | **100%** (14/14) | **100%** | **100%** |
+| Change requests not executed | 9/9, 4/4 | 12/12 | 3/3 | 4/4 | 3/3 |
+| Change requests clearly refused | 5/9, 4/4 | **0/12** | 1/3 | 4/4 | 3/3 |
+| Retries | 0 | 0 | 0 | 0 | 0 |
+| Input tokens per question / follow-up turn | 4,403 / 5,509 | 5,623 | 5,668 | 4,568 (+3%) | 4,546 |
+
+**Findings, part 1**
+1. **Confident answers: fixed.** f06 now names Honda, held-out o14 is answered directly, and answer accuracy is 100% on the main and held-out sets. Showing the SQL to the answer step costs about 3% more input tokens.
+2. **Single questions improved or held:** main 100% (h06 passed), held-out 100%, routing 8/8 and 4/4.
+3. **Vague change requests: not fixed, and the cause was elsewhere.** Nothing was executed, but only 1 of 15 vague follow-up change requests got a clear refusal. In every failing case the report shows the message unchanged ("Remove them.", "Activate all of them."), which is what happens when the router sends it to the ETL agent: words like remove, set or activate read like a data transformation, so the SQL agent's rewrite and refusal never ran. Fix 1 was applied to the right idea but the wrong step.
+4. **New issue, topic switch (fresh g11, 3 of 3 runs):** after "What is the average rating of drivers in Halifax?", the question "How many payments failed?" was rewritten as "...failed in Halifax?", despite the instruction not to carry filters into a new topic.
+5. **Retry on invalid SQL:** no run produced a typo, so this fix is only tested offline so far.
+
+**Part 2 changes** (made after part 1; the fresh set informed findings 3 and 4)
+
+| # | Change | File |
+|---|---|---|
+| 4 | The router is told what each agent is for: anything about the database's records goes to the SQL agent, including requests to add, change or delete them (which it refuses); the ETL agent is only for web APIs and files in `data/`. With a conversation, a request to change records shown earlier is explicitly a database request | `Models/schema.py`, `agents/data_agent.py` |
+| 5 | Defence in depth: the ETL agent replies that it can only read data if asked to change database records, instead of calling a tool | `agents/etl_analyst.py` |
+| 6 | The follow-up rewrite first decides whether the message is complete on its own; a complete message is returned unchanged, with no filters added from earlier messages | `agents/sql_analyst.py` |
+| 7 | Follow-up rewrites use Sonnet instead of Haiku, since reading a message in context is the harder task (single questions still use Haiku with the unchanged prompt) | `agents/sql_analyst.py` |
+| 8 | Reports show which agent answered each conversation's last turn | `evals/run_followup_eval.py` |
+
+**Check set:** before part 2 was made, `evals/followup_check_questions.json` was written and verified: 6 conversations (two topic switches, a value from an earlier answer, a top-1 follow-up) and 3 vague change requests ("Mark them as completed.", "Delete their accounts.", "Turn them back on."). Not used to design fixes.
+
+**Results, part 2** (2026-10-10: check set 3 times, fresh and original follow-up sets once, routing on the main and held-out sets)
+
+| Metric | Part 1 (fresh, 3 runs) | Check set (3 runs) | Fresh | Original follow-ups | Routing (main / held-out) |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Execution accuracy | 91.7% | **100%** (18/18) | **100%** (12/12) | **100%** (14/14) | 8/8, 4/4 |
+| Answer accuracy (LLM judge) | 91.7% | **100%** | **100%** | **100%** | |
+| Change requests not executed | 12/12 | 9/9 | 4/4 | 3/3 | |
+| Change requests clearly refused | 0/12 | **9/9** | **4/4** | **3/3** | |
+| Input tokens per follow-up turn | 5,623 | 5,792 | 5,920 | 5,957 | |
+| Time per follow-up turn | 7.0 s | 6.7 s | 7.5 s | 7.3 s | |
+
+**Findings, part 2**
+1. **Vague change requests are now refused, every time.** All 16 follow-up change requests in these runs went to the SQL agent, were rewritten to name the exact records ("Set the fares of ride IDs 3681, 3509, and 19203 to zero."), and got a clear refusal. The router was the missing piece.
+2. **Topic switches hold.** g11 now stays "How many payments failed?", and both topic switches in the check set kept no filter from the earlier question.
+3. **Every set is at 100%:** check, fresh and original follow-ups, plus main and held-out from part 1. Routing is still 8/8 and 4/4 with the new router description.
+4. **Cost:** Sonnet for follow-up rewrites adds about 5% input tokens per follow-up turn (5,792 vs 5,509 in EXP-06) and a little cost per token; time per follow-up turn stayed around 7 s.
+5. **Still untested live:** the retry on invalid SQL. No run produced a malformed query, so it is covered only by the offline checks.
+
+**What this experiment showed about the process:** each fix was measured on conversations written before it, and twice that caught something the earlier set couldn't: the answer fix worked first time, but the refusal fix only looked right until the fresh set showed the router was sending those requests elsewhere.
 
 ---
 

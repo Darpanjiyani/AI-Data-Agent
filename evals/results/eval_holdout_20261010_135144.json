@@ -1,0 +1,73 @@
+{
+  "run_at": "2026-10-10T13:51:37",
+  "question_set": "holdout",
+  "options": {
+    "set": "holdout",
+    "limit": null,
+    "ids": null,
+    "category": "routing",
+    "no_judge": false,
+    "skip_safety": false,
+    "skip_routing": false
+  },
+  "sql": [],
+  "safety": [],
+  "routing": [
+    {
+      "id": "ro1",
+      "question": "What was our busiest day of the week for rides?",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 1.68,
+      "passed": true
+    },
+    {
+      "id": "ro2",
+      "question": "Average payment amount by method?",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 1.6,
+      "passed": true
+    },
+    {
+      "id": "ro3",
+      "question": "Pull the posts from https://jsonplaceholder.typicode.com/posts into a parquet file in data/extract.",
+      "expected_route": "etl",
+      "route": "etl",
+      "seconds": 1.74,
+      "passed": true
+    },
+    {
+      "id": "ro4",
+      "question": "Take data/extract/extracted_data.csv, remove duplicate rows, and save the result to data/transform.",
+      "expected_route": "etl",
+      "route": "etl",
+      "seconds": 1.6,
+      "passed": true
+    }
+  ],
+  "database_unchanged": true,
+  "table_counts": {
+    "before": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000
+    },
+    "after": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000
+    }
+  },
+  "summary": {
+    "routing_accuracy": 1.0,
+    "lines": [
+      "Routing accuracy:    4/4 (100.0%)",
+      "Database unchanged:  yes"
+    ]
+  }
+}

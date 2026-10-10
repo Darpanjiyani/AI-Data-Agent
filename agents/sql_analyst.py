@@ -46,7 +46,8 @@ def curate_ques(state: AgentSchema) -> AgentSchema:
 
     user_question = state.user_question #Bcz this is pydantic model object, that is why we wrote state.user_question instead of state['user_question']
 
-    llm = pick_llm("low")  # Pick the appropriate LLM based on the specified level
+    # Haiku for standalone questions; reading a follow-up in context is harder, so it uses Sonnet
+    llm = pick_llm("medium" if state.history else "low")
 
     if not state.history:
         # A standalone question: exactly the prompt used before conversation memory,
@@ -68,12 +69,17 @@ def curate_ques(state: AgentSchema) -> AgentSchema:
 
     Rewrite the new message as ONE standalone question that can be understood without
     the conversation.
-    - Use the conversation only to fill in what the new message refers to: a time
-      period, a filter, a group, a metric, or a value from an earlier answer.
-    - If the new message is already a complete question on a different topic, keep it
-      as it is and don't carry over filters from earlier questions.
-    - If the new message asks to add, change or delete data, keep it as that request
-      (for example "Delete the payments listed above"); don't turn it into a question.
+    - First decide whether the new message is complete on its own: it names what it is
+      about and has no words like "it", "them", "those", "there", "that", "and ...?" or
+      "what about ...?" that point back to the conversation. A complete message is a new
+      question: return it unchanged, without adding filters, places or dates from earlier
+      messages.
+    - Otherwise use the conversation only to fill in what the new message refers to: a
+      time period, a filter, a group, a metric, or a value from an earlier answer.
+    - If the new message asks to add, change or delete data, keep it as a change request,
+      but spell out which records it refers to, using the conversation (for example
+      "Delete them" after a list of failed payments becomes "Delete the failed payments
+      that were listed"). Don't turn it into a question.
     - Keep the same meaning and do not add new requirements.
     Return ONLY the rewritten message as a single sentence, with no explanation,
     headings or alternatives.
@@ -117,8 +123,9 @@ Rules:
    rides), start from the table that lists all of them and use NOT EXISTS or a LEFT JOIN.
 6. Give computed columns clear names with AS.
 7. Return only the SQL query, with no explanation, because it will be executed directly.
-8. This agent can only read data. If the user asks to add, change or delete data, or to
-   create, alter or drop tables (even as part of a larger request), don't write SQL:
+8. This agent can only read data. If the user asks to add, change, remove or delete data, or to
+   create, alter or drop tables (even as part of a larger request, or when it
+   doesn't say which records), don't write SQL:
    reply with exactly {WRITE_REQUEST_MARKER}
 
 Data notes:
@@ -156,6 +163,12 @@ def is_safe_sql(state: AgentSchema) -> AgentSchema:
     # If it fails, the query is rejected without calling the LLM judge.
     allowed, reason = is_read_only(sql_query)
     if not allowed:
+        # A query attempt the parser can't read (e.g. a typo like SELECE) is a mistake to fix,
+        # not a safety problem: it goes to fix_sql like a database error. Prose that isn't an
+        # attempt at a query is refused as before.
+        attempted_query = re.match(r"^[\s(]*(SEL\w*|WITH)\b", sql_query, re.IGNORECASE) is not None
+        if "isn't a valid SQL query" in reason and attempted_query:
+            return {"is_safe": "No", "refusal_type": "invalid_sql", "comments": f"Blocked by the SQL guard: {reason}"}
         return {"is_safe": "No", "refusal_type": "guard", "comments": f"Blocked by the SQL guard: {reason}"}
 
     # Step 2: LLM judge as a second opinion.
@@ -186,7 +199,7 @@ def canceled_sql(state: AgentSchema) -> AgentSchema:
             "updating or deleting records, or creating or dropping tables. I can help you look "
             "at the data instead, for example by listing the records you wanted to change."
         )
-    elif state.refusal_type == "guard" and "isn't a valid SQL query" in comments:
+    elif state.refusal_type in ("guard", "invalid_sql") and "isn't a valid SQL query" in comments:
         final_answer = (
             "I couldn't turn this request into a valid read-only query, so nothing was run. "
             "Try asking it as a question about the data."
@@ -217,22 +230,30 @@ def fix_sql(state: AgentSchema) -> AgentSchema:
 
     llm = pick_llm("medium")
 
+    if state.refusal_type == "invalid_sql":
+        problem = "The SQL guard could not parse your previous query."
+        error = state.comments.removeprefix("Blocked by the SQL guard: ")
+    else:
+        problem = "Your previous query failed when it ran on the database."
+        error = state.sql_query_execution_result
+
     prompt = f"""{state.prompt_query_context}
 
-Your previous query failed when it ran on the database.
+{problem}
 
 Previous query:
 {state.generated_sql_query}
 
-Database error:
-{state.sql_query_execution_result}
+Error:
+{error}
 
 Write a corrected query that answers the same question. Follow all the rules above.
 Return only the SQL query.
 """
     corrected_sql = llm.invoke(prompt).text
 
-    return {"generated_sql_query": clean_sql(corrected_sql), "retry_count": state.retry_count + 1}
+    return {"generated_sql_query": clean_sql(corrected_sql), "retry_count": state.retry_count + 1,
+            "refusal_type": ""}
 
 
 # Represent the final answer Node
@@ -251,6 +272,10 @@ def represent_final_answer(state: AgentSchema) -> AgentSchema:
     understand. If the execution result is empty or does not provide a clear answer to the user's question, explain this in the final answer.
     Base the answer only on the execution result. Don't guess about data that isn't in the result
     (for example, don't claim the data stops at a certain date unless the result shows it). \n
+    The SQL query below produced the result. It already applied the question's filters,
+    sorting and limits, so if it returns only the top row(s) for a "which is the most /
+    least" question, that row is the answer: state it directly.
+    Here is the SQL query: {state.generated_sql_query} \n
     Here is the execution result: {execution_result} \n
     Here is the user's original question: {curated_question}
     """
@@ -286,13 +311,14 @@ def is_safe_sql_edge(state: AgentSchema) -> str:
 
     if is_safe.lower() == "yes":
         return "execute_sql"
-
-    else :
-        return "canceled_sql"
+    if state.refusal_type == "invalid_sql" and state.retry_count < MAX_SQL_RETRIES:
+        return "fix_sql"   # a typo in the query: rewrite it instead of refusing
+    return "canceled_sql"
 
 sql_agent_graph.add_conditional_edges("is_safe_sql", is_safe_sql_edge,
                                       {
                                           "execute_sql": "execute_sql",
+                                          "fix_sql": "fix_sql",
                                           "canceled_sql": "canceled_sql"
                                       })
 
