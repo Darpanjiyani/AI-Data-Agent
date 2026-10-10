@@ -48,13 +48,40 @@ def curate_ques(state: AgentSchema) -> AgentSchema:
 
     llm = pick_llm("low")  # Pick the appropriate LLM based on the specified level
 
-    prompt = f"""
+    if not state.history:
+        # A standalone question: exactly the prompt used before conversation memory,
+        # so single questions behave as they did in EXP-05.
+        prompt = f"""
     Rewrite the following question about a database so it is clear and specific.
     Keep the same meaning and do not add new requirements.
     Return ONLY the rewritten question as a single sentence, with no explanation,
     headings or alternatives.
 
     Question: {user_question}
+    """
+    else:
+        # A message in an ongoing chat: turn it into a question that stands on its own,
+        # so every later step (SQL rules, safety checks) works exactly as for a single question.
+        prompt = f"""
+    Below is a conversation between a user and a data assistant about a ride-sharing
+    database, followed by the user's new message.
+
+    Rewrite the new message as ONE standalone question that can be understood without
+    the conversation.
+    - Use the conversation only to fill in what the new message refers to: a time
+      period, a filter, a group, a metric, or a value from an earlier answer.
+    - If the new message is already a complete question on a different topic, keep it
+      as it is and don't carry over filters from earlier questions.
+    - If the new message asks to add, change or delete data, keep it as that request
+      (for example "Delete the payments listed above"); don't turn it into a question.
+    - Keep the same meaning and do not add new requirements.
+    Return ONLY the rewritten message as a single sentence, with no explanation,
+    headings or alternatives.
+
+    Conversation so far:
+    {state.history}
+
+    New message: {user_question}
     """
 
     # .text works whether Claude replies with plain text or a list of content blocks

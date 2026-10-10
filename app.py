@@ -7,6 +7,7 @@ Run from the project root:
 
 import json
 import os
+import uuid
 from pathlib import Path
 
 import streamlit as st
@@ -113,6 +114,11 @@ def render_reply(reply, index: int) -> None:
             st.badge(f"Self-corrected ({reply.retries} retr{'y' if reply.retries == 1 else 'ies'})",
                      icon=":material/autorenew:", color="green")
 
+    # For a follow-up, show how the agent read it, so a wrong reading is easy to spot
+    if reply.used_history and reply.standalone_question \
+            and reply.standalone_question.strip().lower() != reply.question.strip().lower():
+        st.caption(f"Understood as: {escape_markdown(reply.standalone_question)}")
+
     if reply.refused:
         st.warning(escape_markdown(reply.answer), icon=":material/shield:")
         st.caption("Nothing was run on the database.")
@@ -149,6 +155,9 @@ def render_reply(reply, index: int) -> None:
 
 if "history" not in st.session_state:
     st.session_state.history = []
+if "thread_id" not in st.session_state:
+    # One conversation per browser session; the agent remembers it for follow-ups
+    st.session_state.thread_id = uuid.uuid4().hex
 
 with st.sidebar:
     st.title("🤖 AI Data Agent")
@@ -166,11 +175,12 @@ with st.sidebar:
         "- Requests to change data are refused, not run"
     )
 
-    st.caption("Each question is answered on its own, so follow-up questions "
-               "like \"and last year?\" aren't supported yet.")
+    st.caption("Follow-up questions work: after a question, try \"And in 2026?\" or "
+               "\"Break that down by city.\" Clear chat starts a new conversation.")
 
     if st.button("Clear chat", icon=":material/delete:", width="stretch"):
         st.session_state.history = []
+        st.session_state.thread_id = uuid.uuid4().hex  # the agent forgets the old chat
         st.rerun()
 
 
@@ -191,7 +201,7 @@ if not st.session_state.history:
     st.markdown(
         "Ask about **users, drivers, vehicles, rides, payments or ratings**, or pick a "
         "question from the sidebar. You'll see the answer, a chart when one fits, the "
-        "data and the exact SQL that was run."
+        "data and the exact SQL that was run. Ask follow-ups as you would a colleague."
     )
 
 for index, item in enumerate(st.session_state.history):
@@ -213,7 +223,8 @@ if question:
         try:
             service = load_agent()
             with st.status("Working on it...", expanded=True) as status:
-                reply = service.ask(question, on_step=lambda step: status.write(f"✓ {step}"))
+                reply = service.ask(question, thread_id=st.session_state.thread_id,
+                                    on_step=lambda step: status.write(f"✓ {step}"))
                 status.update(label=f"Done in {reply.seconds:.1f} s", state="complete",
                               expanded=False)
         except Exception as error:  # e.g. database down, invalid API key

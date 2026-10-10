@@ -138,8 +138,11 @@ def build_chart(plan: ChartPlan, measure: str, color: str):
     if plan.kind == "line":
         x_type = "T" if pd.api.types.is_datetime64_any_dtype(data[plan.x]) else (
             "Q" if pd.api.types.is_numeric_dtype(data[plan.x]) else "O")
+        # Whole-number x values (months, hours, years) get whole-number ticks, not 1.5
+        whole = x_type == "Q" and bool((data[plan.x] % 1 == 0).all())
+        x_axis = alt.Axis(format="d", tickMinStep=1) if whole else alt.Axis()
         base = alt.Chart(data).encode(
-            x=alt.X(f"{plan.x}:{x_type}", title=x_title, sort=None),
+            x=alt.X(f"{plan.x}:{x_type}", title=x_title, sort=None, axis=x_axis),
             y=alt.Y(f"{measure}:Q", title=y_title, axis=alt.Axis(format=",.2~f")),
             tooltip=tooltip,
         )

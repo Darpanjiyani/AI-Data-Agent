@@ -49,8 +49,8 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 
 ```
                      ┌──────────────────────────────┐
-   Your question ──► │     Data Agent (router)      │
-                     │   Classifies: "sql" or "etl" │
+   Your question ──► │     Data Agent (router)      │ ◄── conversation memory
+                     │   Classifies: "sql" or "etl" │     (checkpointer, per chat)
                      └──────────────┬───────────────┘
                                     │
                 ┌───────────────────┴───────────────────┐
@@ -59,7 +59,8 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
      │     SQL Analyst     │                 │     ETL Analyst     │
      │  (fixed pipeline)   │                 │ (tool-using agent)  │
      └─────────────────────┘                 └─────────────────────┘
-       1. Rewrite question                     Claude picks a tool and
+       1. Rewrite question (a follow-up        Claude picks a tool and
+          becomes a standalone question)
        2. Schema + data notes (cached)         loops until the task is done:
        3. Generate SQL                         • extract_load_tool
        4. Change request? → clear refusal      • transform_load_tool
@@ -71,7 +72,8 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 
 | Component | File | Role |
 |---|---|---|
-| Router | `agents/data_agent.py` | Structured-output classification (`sql` / `etl`) with a Pydantic schema |
+| Router + memory | `agents/data_agent.py` | Structured-output classification (`sql` / `etl`); a LangGraph checkpointer keeps each chat's messages |
+| Service | `agents/service.py` | `ask(question, thread_id)`: one call for any interface, returns answer, SQL, rows and steps |
 | SQL Analyst | `agents/sql_analyst.py` | LangGraph pipeline from question to answer |
 | ETL Analyst | `agents/etl_analyst.py` | ReAct-style tool-calling loop |
 | Schema context | `utils/database.py`, `utils/schema_notes.py` | Tables, columns, allowed values, foreign keys, data notes |
@@ -102,6 +104,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 
 ### Chat app
 - Ask questions in a chat interface (`uv run streamlit run app.py`).
+- **Follow-up questions:** ask "And in 2026?" or "Break that down by city" and the agent uses the conversation to understand it. A line under the badges shows how a follow-up was understood, and "Clear chat" starts a new conversation.
 - Each answer shows which agent handled it, plus a badge when a request was refused or a query was self-corrected.
 - Live progress while the agent works: understanding the question, writing SQL, safety check, running the query.
 - **Automatic charts:** a single number becomes a headline metric, a breakdown becomes a bar chart (in the query's order), and a time series becomes a line chart. Lists of records stay as a table. When a result has several numbers (e.g. total rides and cancellation rate), you can choose which one to chart.
@@ -110,6 +113,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 
 ### SQL Analyst
 - Converts natural-language questions into PostgreSQL.
+- Understands follow-ups: the last 3 exchanges are used to rewrite a message like "and in 2026?" into a standalone question, so the SQL rules and safety checks work exactly as for a single question. A follow-up that asks to change data ("delete them") is never executed.
 - Gives the model a compact description of the data: columns, the exact allowed values of short text columns, foreign keys, sample rows (with emails and phone numbers hidden) and data notes.
 - Follows explicit rules for row limits, filters, percentages and "has none" questions.
 - Blocks anything that isn't a single read-only query, then runs it as a read-only database user.
@@ -235,10 +239,14 @@ From Python:
 ```python
 from agents.service import ask
 
-reply = ask("Which 5 drivers have the highest average rating?")
+reply = ask("Which 5 drivers have the highest average rating?", thread_id="chat-1")
 print(reply.answer)   # plain-English answer
 print(reply.sql)      # the SQL that was run
 print(reply.rows)     # the result rows
+
+# Same thread_id = same conversation, so follow-ups work
+reply = ask("Which city is each of them based in?", thread_id="chat-1")
+print(reply.standalone_question)  # how the follow-up was understood
 ```
 
 **Example requests**
@@ -281,7 +289,7 @@ Generated code runs in a separate Python process, so it can't crash or freeze th
 
 ## 6. Evaluation Framework
 
-`evals/` measures the agent with **59 questions** about the ride-sharing data.
+`evals/` measures the agent with **59 questions** about the ride-sharing data, plus a held-out set and a set of follow-up conversations (below).
 
 | Set | Questions | What is checked |
 |---|---:|---|
@@ -308,12 +316,16 @@ uv run evals/run_eval.py --category hard     # one category
 uv run evals/run_eval.py --ids s01 t01       # specific questions
 uv run evals/run_eval.py --no-judge          # skip the LLM judge (cheaper)
 uv run evals/run_eval.py --set holdout       # held-out questions (see below)
+uv run evals/run_followup_eval.py            # follow-up conversations (see below)
 ```
 
 Each run writes a Markdown report (summary, per-question results, and every failure with its generated SQL) and a JSON file to `evals/results/`.
 
 ### Held-out set
 `evals/holdout_questions.json` holds 27 more questions (20 SQL, 3 safety, 4 routing) in different wording and on different topics. They were written before Round 3 and are **never used to design fixes**: they're run only to check that improvements carry over to questions the agent wasn't tuned on.
+
+### Follow-up conversations
+`evals/followup_questions.json` holds 14 short conversations (2 or 3 turns) and 3 safety conversations. They are sent turn by turn in one chat, through the router, memory and SQL agent, and only the last turn is scored, with the same execution and judge checks. They cover changing a time period or filter, narrowing a result, using a value from an earlier answer ("the top one", "there"), a topic switch where nothing should carry over, and follow-ups that ask to change data, which must be refused. The report shows how each follow-up was understood.
 
 ### Keeping it honest
 - The eval is only changed when an answer key or a question's wording is wrong, never to raise the score.
@@ -334,6 +346,8 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 | v2.0 | Same version on the **held-out set** (20 unseen questions) | **100%** | 95% | 4,335 | 5.5 s |
 | v2.1 | Round 3: clear refusals and self-correcting SQL | **99.3%** (avg of 3 runs) | **99.3%** | 4,432 (+2%) | 5.6 s |
 | v2.1 | Same version on the **held-out set** | **100%** | **100%** | 4,413 | 5.6 s |
+| v2.2 | Round 5: conversation memory, **follow-up conversations** (14, 3 runs) | **100%** | 92.9% | 5,509 per follow-up turn | 8.1 s |
+| v2.2 | Same version, main set (regression check, 1 run) | 97.9% | 97.9% | 4,403 | 6.3 s |
 
 Results by category, notes on each number, and the caveats are in [docs/experiments.md](docs/experiments.md#results-by-version); every round has its own write-up there.
 
@@ -347,6 +361,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - [x] Isolated, time-limited execution for generated ETL code
 - [x] Personal columns hidden from the LLM
 - [ ] Run generated ETL code in a container
+- [ ] Clear refusals for vague follow-up change requests ("remove those drivers")
 
 **Accuracy**
 - [x] Query results with column names
@@ -355,10 +370,12 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - [x] SQL rules: row limits, filters, denominators, "has none" questions
 - [x] Clear, consistent refusals for requests to change data
 - [x] Self-correcting SQL: retry with the database error
-- [ ] Conversation memory with a LangGraph checkpointer
+- [x] Conversation memory with a LangGraph checkpointer
 - [x] Held-out evaluation questions
 - [x] Repeated eval runs to measure run-to-run variance
 - [ ] Result sanity checks (e.g. a "how many" question should return one row)
+- [ ] Retry when the guard finds invalid SQL, not only on database errors
+- [ ] Show the SQL to the answer step, so a top-1 result is stated confidently
 
 **Cost and speed**
 - [x] Schema built once per process; SQL prompt 41% smaller
@@ -383,7 +400,8 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 
 **Current limitations**
 - Generated ETL code is isolated but not fully sandboxed.
-- The router only sees the latest message, so follow-up questions lack context.
+- Conversation memory lasts while the app is running (in-memory checkpointer); a database-backed checkpointer would keep chats across restarts.
+- Follow-ups use the last 3 exchanges; something mentioned earlier than that is forgotten.
 - Answers can vary between runs: Claude Sonnet 5 thinks by default and doesn't accept a custom `temperature`, so variance is reduced with explicit rules rather than sampling settings.
 - Self-correction only catches queries that fail; a query that runs but answers the wrong question isn't caught yet.
 - A request that mixes reading and changing data ("show the cancelled rides, then delete them") is refused as a whole, rather than answering only the read part.
@@ -398,7 +416,7 @@ AI-Data-Agent/
 │   ├── data_agent.py        # Router
 │   ├── sql_analyst.py       # Question → SQL → answer pipeline
 │   ├── etl_analyst.py       # Tool-calling agent for extract/transform
-│   └── service.py           # ask(): routes a request and returns answer, SQL, rows, steps
+│   └── service.py           # ask(question, thread_id): answer, SQL, rows, steps
 ├── Models/
 │   └── schema.py            # Pydantic state models
 ├── utils/
@@ -412,6 +430,8 @@ AI-Data-Agent/
 ├── evals/
 │   ├── questions.json       # Evaluation questions with reference SQL
 │   ├── holdout_questions.json  # Held-out questions, never used to design fixes
+│   ├── followup_questions.json # Multi-turn conversations for conversation memory
+│   ├── run_followup_eval.py # Scores follow-up conversations
 │   ├── run_eval.py          # Scores the agent and writes reports
 │   └── results/             # Reports from each run
 ├── docs/
