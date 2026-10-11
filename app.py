@@ -149,7 +149,8 @@ def render_reply(reply, index: int) -> None:
             st.markdown(f"- {step}")
 
     tokens = reply.input_tokens + reply.output_tokens
-    st.caption(f"{reply.seconds:.1f} s · {tokens:,} tokens")
+    cached = f" ({reply.cache_read_tokens:,} read from cache)" if reply.cache_read_tokens else ""
+    st.caption(f"{reply.seconds:.1f} s · {tokens:,} tokens{cached}")
 
 
 # ------------------------------------------------------------------ sidebar

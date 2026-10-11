@@ -21,6 +21,7 @@ from langchain_core.callbacks import get_usage_metadata_callback
 from langchain_core.messages import HumanMessage
 
 from agents.data_agent import data_agent
+from utils.usage import summarize_usage
 
 StepCallback = Optional[Callable[[str], None]]
 
@@ -41,8 +42,11 @@ class AgentReply:
     steps: list = field(default_factory=list)       # what the agent did, in order
     etl_actions: list = field(default_factory=list) # ETL tool calls and their results
     seconds: float = 0.0
-    input_tokens: int = 0
+    input_tokens: int = 0               # all input tokens, cached or not
     output_tokens: int = 0
+    cache_read_tokens: int = 0          # input read from the prompt cache (0.1x price)
+    cache_write_tokens: int = 0         # input written to the prompt cache (1.25x price)
+    billed_input_tokens: float = 0.0    # input cost in normal-price tokens
 
 
 def ask(question: str, thread_id: str = "default", on_step: StepCallback = None) -> AgentReply:
@@ -68,8 +72,8 @@ def ask(question: str, thread_id: str = "default", on_step: StepCallback = None)
             setattr(reply, name, turn[name])
 
     reply.seconds = time.perf_counter() - start
-    reply.input_tokens = sum(u.get("input_tokens", 0) for u in usage.usage_metadata.values())
-    reply.output_tokens = sum(u.get("output_tokens", 0) for u in usage.usage_metadata.values())
+    for name, value in summarize_usage(usage.usage_metadata).items():
+        setattr(reply, name, value)
     return reply
 
 

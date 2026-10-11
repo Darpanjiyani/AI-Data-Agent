@@ -40,6 +40,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 - Three independent layers of SQL safety; unsafe requests are never executed.
 - A 59-question evaluation harness with execution accuracy and LLM-as-a-judge scoring.
 - Accuracy raised from 89.4% to 99.3% (average of 3 runs) on 47 SQL questions, and 100% on 20 held-out questions.
+- Prompt caching cuts the billed input per question by about 59%, with no loss of accuracy on the held-out or follow-up sets.
 - Conversation memory: follow-ups like "and in 2026?" or "how many rides did the top one take?" answered correctly in all 32 test conversations, and follow-up requests to change data ("delete them") refused.
 - Measured, documented improvement rounds: each change is evaluated before and after.
 - A Streamlit chat app that shows the answer, an automatic chart, the data and the exact SQL that was run.
@@ -62,7 +63,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
      └─────────────────────┘                 └─────────────────────┘
        1. Rewrite question (a follow-up        Claude picks a tool and
           becomes a standalone question)
-       2. Schema + data notes (cached)         loops until the task is done:
+       2. Schema + data notes (prompt-cached)  loops until the task is done:
        3. Generate SQL                         • extract_load_tool
        4. Change request? → clear refusal      • transform_load_tool
           SQL guard + LLM safety judge           (code runs in an isolated,
@@ -117,6 +118,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 - Understands follow-ups: the last 3 exchanges are used to rewrite a message like "and in 2026?" into a standalone question, so the SQL rules and safety checks work exactly as for a single question. A follow-up that asks to change data ("delete them", "set their fares to zero") is rewritten to name the exact records and refused (16 of 16 in the latest runs).
 - Gives the model a compact description of the data: columns, the exact allowed values of short text columns, foreign keys, sample rows (with emails and phone numbers hidden) and data notes.
 - Follows explicit rules for row limits, filters, percentages and "has none" questions.
+- Uses prompt caching: the instructions, data notes and schema are identical for every question, so they are sent as a cached block that Claude reads at a tenth of the normal input price after the first question.
 - Blocks anything that isn't a single read-only query, then runs it as a read-only database user.
 - Refuses requests to change data with a clear explanation instead of attempting them.
 - Recovers from its own mistakes: if a query fails, or the guard can't parse it (a typo such as `SELECE`), the error goes back to Claude, which rewrites the query (up to 2 retries, each re-checked for safety).
@@ -306,7 +308,7 @@ Every answer gets two scores:
 - **Execution accuracy (strict):** the agent's result matches the correct data.
 - **Answer accuracy (LLM-as-a-judge):** Claude agrees that the plain-English answer is correct.
 
-The runner also records time and tokens per question, checks safety and routing, and confirms that no table changed.
+The runner also records time and tokens per question (including how much input was read from the prompt cache, and the input cost in normal-price tokens), checks safety and routing, and confirms that no table changed.
 
 ### Running it
 
@@ -354,6 +356,10 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 | v2.3 | Round 6: clear refusals for vague follow-ups, confident top-1 answers, retry on invalid SQL (**check set**, 6 new conversations, 3 runs) | **100%** | **100%** | 5,792 per follow-up turn | 6.7 s |
 | v2.3 | Same version, main set | **100%** | **100%** | 4,568 | 5.6 s |
 | v2.3 | Same version, held-out set | **100%** | **100%** | 4,546 | 5.5 s |
+| v2.4 | Round 7: prompt caching for the SQL context (main set) | 97.9%¹ | 97.9% | 4,582 (**1,861 billed, −59%**) | 6.2 s |
+| v2.4 | Same version, held-out set | **100%** | **100%** | 4,554 (**1,936 billed, −57%**) | 5.5 s |
+
+¹ The one miss is h06, the same occasional mistake seen before caching; see [EXP-08](docs/experiments.md#exp-08--prompt-caching). Billed input = uncached input + 0.1 × cache reads + 1.25 × cache writes.
 
 Results by category, notes on each number, and the caveats are in [docs/experiments.md](docs/experiments.md#results-by-version); every round has its own write-up there.
 
@@ -386,7 +392,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 
 **Cost and speed**
 - [x] Schema built once per process; SQL prompt 41% smaller
-- [ ] Prompt caching for the schema context
+- [x] Prompt caching for the schema context
 - [ ] Compare a decision model (e.g. Jev) with Sonnet for routing
 
 **Features**
@@ -431,6 +437,7 @@ AI-Data-Agent/
 │   ├── schema_notes.py      # Agent tables and data notes for the LLM
 │   ├── sql_guard.py         # Rule-based read-only check
 │   ├── charts.py            # Picks a chart (metric, bar, line or none) for a result
+│   ├── usage.py             # Token usage, cache reads/writes and billed input tokens
 │   ├── etl_tools.py         # API extraction, file reading, isolated code execution
 │   ├── feed_db.py           # Creates tables and loads the dataset
 │   └── llm_pick.py          # Model per step

@@ -9,7 +9,7 @@ from utils.sql_guard import is_read_only
 from utils.schema_notes import AGENT_TABLES, DATA_NOTES
 from functools import lru_cache
 from Models.schema import AgentSchema, JudgeSchema
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
 
 import re
@@ -98,13 +98,7 @@ def curate_ques(state: AgentSchema) -> AgentSchema:
     return {"curated_ques": response, "messages": [HumanMessage(content=response)]}
 
 
-def prompt_query_context(state: AgentSchema) -> AgentSchema:
-
-    curated_question = state.curated_ques
-
-    schema_info = get_schema_context()
-
-    prompt = f"""
+SQL_RULES = f"""
 You are an expert PostgreSQL analyst. Write ONE PostgreSQL query that answers the
 user's question, using the database described below.
 
@@ -126,25 +120,41 @@ Rules:
 8. This agent can only read data. If the user asks to add, change, remove or delete data, or to
    create, alter or drop tables (even as part of a larger request, or when it
    doesn't say which records), don't write SQL:
-   reply with exactly {WRITE_REQUEST_MARKER}
+   reply with exactly {WRITE_REQUEST_MARKER}"""
 
-Data notes:
-{DATA_NOTES}
 
-{schema_info}
+def sql_context() -> str:
+    """
+    The part of the SQL prompt that is identical for every question: instructions,
+    rules, data notes and the schema (about 4,000 tokens). It is sent as a system block
+    marked for prompt caching, so after the first question Claude reads it from its
+    cache at a tenth of the normal input price instead of processing it again.
+    """
+    return f"{SQL_RULES.strip()}\n\nData notes:\n{DATA_NOTES}\n\n{get_schema_context()}"
 
-User's question: {curated_question}
-"""
+
+def sql_messages(user_text: str) -> list:
+    """The cached context as a system block, then the part that changes per request."""
+    return [
+        SystemMessage(content=[{"type": "text", "text": sql_context(),
+                                "cache_control": {"type": "ephemeral"}}]),
+        HumanMessage(content=user_text),
+    ]
+
+
+def prompt_query_context(state: AgentSchema) -> AgentSchema:
+
+    # Kept in the state so the full prompt can be inspected; generate_sql sends the same
+    # text split into the cached context and the question.
+    prompt = f"{sql_context()}\n\nUser's question: {state.curated_ques}"
 
     return {"prompt_query_context": prompt}
 
 #Generate SQL Query Node
 def generate_sql(state: AgentSchema) -> AgentSchema:
 
-    prompt = state.prompt_query_context
-
     llm = pick_llm("medium")  # Pick the appropriate LLM based on the specified level
-    generated_sql_query = llm.invoke(prompt).text
+    generated_sql_query = llm.invoke(sql_messages(f"User's question: {state.curated_ques}")).text
 
     return {"generated_sql_query": clean_sql(generated_sql_query)}
 
@@ -237,7 +247,7 @@ def fix_sql(state: AgentSchema) -> AgentSchema:
         problem = "Your previous query failed when it ran on the database."
         error = state.sql_query_execution_result
 
-    prompt = f"""{state.prompt_query_context}
+    request = f"""User's question: {state.curated_ques}
 
 {problem}
 
@@ -247,10 +257,11 @@ Previous query:
 Error:
 {error}
 
-Write a corrected query that answers the same question. Follow all the rules above.
+Write a corrected query that answers the same question. Follow all the rules in the instructions.
 Return only the SQL query.
 """
-    corrected_sql = llm.invoke(prompt).text
+    # Same cached context as generate_sql, so a retry reads it from the cache too
+    corrected_sql = llm.invoke(sql_messages(request)).text
 
     return {"generated_sql_query": clean_sql(corrected_sql), "retry_count": state.retry_count + 1,
             "refusal_type": ""}

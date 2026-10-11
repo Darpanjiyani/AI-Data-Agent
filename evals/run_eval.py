@@ -48,6 +48,7 @@ from langchain_core.callbacks import get_usage_metadata_callback
 from utils.database import DatabaseUtil, reader_connection_details
 from utils.sql_guard import is_read_only
 from utils.llm_pick import pick_llm
+from utils.usage import summarize_usage
 
 QUESTION_SETS = {
     "main": PROJECT_ROOT / "evals" / "questions.json",
@@ -223,8 +224,7 @@ def run_sql_agent(sql_analyst, question: str) -> dict:
         output = sql_analyst.invoke(initial_state)
     seconds = time.perf_counter() - start
 
-    input_tokens = sum(u.get("input_tokens", 0) for u in usage.usage_metadata.values())
-    output_tokens = sum(u.get("output_tokens", 0) for u in usage.usage_metadata.values())
+    tokens = summarize_usage(usage.usage_metadata)
 
     return {
         "curated_question": output.get("curated_ques", ""),
@@ -236,8 +236,7 @@ def run_sql_agent(sql_analyst, question: str) -> dict:
         "retries": output.get("retry_count", 0),
         "refusal_type": output.get("refusal_type", ""),
         "seconds": round(seconds, 2),
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
+        **tokens,  # input/output tokens, cache reads/writes, billed input tokens
     }
 
 
@@ -443,6 +442,16 @@ def build_summary(report, judged: bool) -> dict:
             avg_out = sum(e["output_tokens"] for e in timed) / len(timed)
             summary.update({"avg_seconds": avg_s, "avg_input_tokens": avg_in, "avg_output_tokens": avg_out})
             lines.append(f"Avg per question:    {avg_s:.1f}s, {avg_in:,.0f} input + {avg_out:,.0f} output tokens")
+
+            cached = [e for e in timed if "billed_input_tokens" in e]
+            if cached:
+                read = sum(e["cache_read_tokens"] for e in cached)
+                total_in = sum(e["input_tokens"] for e in cached)
+                billed = sum(e["billed_input_tokens"] for e in cached) / len(cached)
+                summary.update({"cache_read_share": read / total_in if total_in else 0,
+                                "avg_billed_input_tokens": billed})
+                lines.append(f"Prompt cache:        {pct(read, total_in)} of input tokens read from cache; "
+                             f"billed input = {billed:,.0f} normal-price tokens per question")
 
             retried = [e for e in timed if e.get("retries", 0) > 0]
             recovered = [e for e in retried if e["execution_match"]]

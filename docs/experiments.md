@@ -11,6 +11,7 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 | [EXP-05](#exp-05--clear-refusals-and-self-correction) | 2026-10-09 | Clear refusals and self-correcting SQL | **99.3%** (3-run avg)³; held-out **100%** | **99.3%** | 4,432 |
 | [EXP-06](#exp-06--conversation-memory) | 2026-10-10 | Conversation memory (follow-up questions) | follow-ups **100%** (42/42)⁴; main 97.9% | follow-ups 92.9% | 5,509 per follow-up turn |
 | [EXP-07](#exp-07--clear-follow-up-refusals-confident-answers-retry-on-invalid-sql) | 2026-10-10 | Clear follow-up refusals, confident top-1 answers, retry on invalid SQL | check set **100%** (18/18)⁵; fresh, follow-up, main and held-out **100%** | **100%** on every set | 5,792 per follow-up turn |
+| [EXP-08](#exp-08--prompt-caching) | 2026-10-10 | Prompt caching for the SQL context | main 97.9%, held-out **100%**, check **100%** | same | **1,861 billed** (−59%) of 4,582 |
 
 ¹ 95% as first scored; the one miss was a scoring bug (date vs midnight timestamp), fixed and re-scored.
 ² The one "incorrect" verdict was a judge error; its own reasoning found every value correct.
@@ -445,6 +446,54 @@ The filtering logic is right, but the `COUNT` sits in the same query as `GROUP B
 5. **Still untested live:** the retry on invalid SQL. No run produced a malformed query, so it is covered only by the offline checks.
 
 **What this experiment showed about the process:** each fix was measured on conversations written before it, and twice that caught something the earlier set couldn't: the answer fix worked first time, but the refusal fix only looked right until the fresh set showed the router was sending those requests elsewhere.
+
+## EXP-08 – Prompt caching
+
+**Goal:** cut the cost (and, if possible, the time) of each question without changing what the agent does. This was the last item promised in the v2 LinkedIn post.
+
+**How prompt caching works** (from the [Claude prompt caching docs](https://platform.claude.com/docs/en/build-with-claude/prompt-caching), checked 2026-10-10):
+- A request can mark a block with `cache_control`. The first time, the prompt up to that block is written to a cache; later requests whose prompt starts with exactly the same text read it from the cache instead.
+- Cache reads cost 0.1x the normal input price and cache writes 1.25x (5-minute cache). For Claude Sonnet 5 that is $0.20 instead of $2 per million input tokens for the cached part.
+- The cache lasts 5 minutes and is refreshed for free every time it is used.
+- The minimum cacheable prompt is 1,024 tokens for Claude Sonnet 5 and 4,096 for Claude Haiku 4.5.
+
+**What can be cached here:** the SQL prompt (instructions, the 8 rules, data notes and the schema) is identical for every question; only the question at the end changes. It is the largest prompt in the system and goes to Sonnet. The other steps (router, rewrite, safety review, answer) send short prompts that are below the minimum or change every time, so they are left as they are.
+
+**Changes**
+
+| # | Change | File |
+|---|---|---|
+| 1 | The SQL prompt is split into a fixed context (instructions, rules, data notes, schema), sent as a system block marked with `cache_control`, and a short message with the question | `agents/sql_analyst.py` |
+| 2 | The retry step (`fix_sql`) sends the same cached context, so a retry reads it from the cache too | `agents/sql_analyst.py` |
+| 3 | Token accounting includes cache reads and writes, and a "billed input tokens" figure: uncached input + 0.1 x cache reads + 1.25 x cache writes, i.e. the input cost in normal-price tokens | `utils/usage.py`, `evals/run_eval.py`, `evals/run_followup_eval.py`, `agents/service.py` |
+| 4 | The app shows how many tokens each answer read from the cache | `app.py` |
+
+**Offline checks**
+- The request LangChain builds for Claude has one system block with `cache_control: ephemeral`, and that block is byte-for-byte identical for two different questions, which is what a cache hit needs.
+- The cost formula gives the expected figure on a worked example, and all stand-in runs pass (main 47/47, follow-up 14/14, fresh 12/12, check 6/6, refusals, retries).
+
+**Expected effect:** after the first question, most of the SQL step's input should be read from the cache, so billed input per question should drop sharply. The prompt's content is unchanged, but it now arrives as a system block plus a question instead of one message, so accuracy is re-measured rather than assumed.
+
+**Results** (2026-10-10: main set, held-out set and check set once each)
+
+| Metric | EXP-07 (main) | EXP-08 main | EXP-08 held-out | EXP-08 check (follow-ups) |
+|---|:---:|:---:|:---:|:---:|
+| Execution accuracy | 100% | 97.9% (46/47) | **100%** (20/20) | **100%** (6/6) |
+| Answer accuracy (LLM judge) | 100% | 97.9% | **100%** | **100%** |
+| Change requests refused | 4/4 | 4/4 | 3/3 | 3/3 |
+| Input tokens per question / turn | 4,568 | 4,582 | 4,554 | 5,791 |
+| Share of input read from cache | 0% | **66.4%** | **64.8%** | **53.7%** |
+| Billed input tokens per question / turn | 4,568 | **1,861 (−59%)** | **1,936 (−57%)** | **2,993 (−48%)** |
+| Time per question / turn | 5.6 s | 6.2 s* | 5.5 s | 6.5 s |
+
+\* One question (h02) took 31 s, an API delay; without it the average is 5.7 s.
+
+**Findings**
+1. **Input cost per question fell by more than half.** About two thirds of every question's input is now read from the cache, so the billed input drops from about 4,570 to about 1,900 normal-price tokens on single questions. Follow-up turns save less (−48%) because the conversation history in the rewrite and router prompts changes every time and can't be cached. "Billed input tokens" counts tokens, not dollars: steps on Haiku cost less per token than steps on Sonnet, but the SQL step, where all the caching happens, runs on Sonnet.
+2. **Accuracy held.** Held-out 100%, check set 100% with all 3 change requests refused, and every routing question correct. The one main-set miss is h06, with exactly the same SQL mistake as in EXP-05 run 3, before caching existed (`COUNT(DISTINCT ...)` inside a `GROUP BY`, which returns one row per user instead of one total). Across the last six main-set runs, h06 is the only question that has failed, and it failed in three of them.
+3. **Time didn't change.** The model's thinking and writing take most of the time, so caching saves money rather than seconds here.
+
+**Next:** h06 is now the only failing question. A result sanity check (a "how many" question should return one row; if it returns many, rewrite the query) is the general fix and is already on the roadmap.
 
 ---
 

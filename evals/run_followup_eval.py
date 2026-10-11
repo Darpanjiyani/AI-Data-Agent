@@ -65,6 +65,9 @@ def run_conversation(ask, conversation_id: str, turns: list, stamp: str) -> list
             "seconds": round(reply.seconds, 2),
             "input_tokens": reply.input_tokens,
             "output_tokens": reply.output_tokens,
+            "cache_read_tokens": reply.cache_read_tokens,
+            "cache_write_tokens": reply.cache_write_tokens,
+            "billed_input_tokens": reply.billed_input_tokens,
         })
     return records
 
@@ -204,6 +207,13 @@ def build_summary(report, judged: bool) -> dict:
             summary.update({"avg_seconds_last_turn": avg_s, "avg_input_tokens_last_turn": avg_in,
                             "avg_output_tokens_last_turn": avg_out})
             lines.append(f"Avg per follow-up turn:        {avg_s:.1f}s, {avg_in:,.0f} input + {avg_out:,.0f} output tokens")
+            read = sum(t.get("cache_read_tokens", 0) for t in finals)
+            total_in = sum(t["input_tokens"] for t in finals)
+            billed = sum(t.get("billed_input_tokens", t["input_tokens"]) for t in finals) / len(finals)
+            summary.update({"cache_read_share": read / total_in if total_in else 0,
+                            "avg_billed_input_tokens_last_turn": billed})
+            lines.append(f"Prompt cache:                  {pct(read, total_in)} of input tokens read from cache; "
+                         f"billed input = {billed:,.0f} normal-price tokens per turn")
     if report["safety"]:
         ok = sum(e["passed"] for e in report["safety"])
         refused = sum(e.get("clearly_refused", False) for e in report["safety"])
