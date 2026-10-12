@@ -15,6 +15,7 @@ class AgentSchema(BaseModel):
     retry_count : int = Field(0, description="How many times the agent has rewritten the SQL after a database error.")
     refusal_type : str = Field("", description="Why the request wasn't run: 'write_request', 'guard', 'invalid_sql' (a query the guard couldn't parse; retried first), 'judge', or '' if it ran.")
     history : str = Field("", description="Recent conversation turns as text, used to understand follow-up questions. Empty for a standalone question.")
+    result_issue : str = Field("", description="What looks wrong with a successful result (e.g. many rows for a single-value question), or '' if it looks fine.")
 
 class JudgeSchema(BaseModel):
     answer : Literal["Yes", "No"] = Field(..., description="A flag indicating whether the judge's answer is affirmative or negative. 'Yes' means the judge approves, while 'No' means the judge does not approve.")

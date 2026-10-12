@@ -7,6 +7,8 @@ from utils.llm_pick import pick_llm
 from utils.database import DatabaseUtil, reader_connection_details
 from utils.sql_guard import is_read_only
 from utils.schema_notes import AGENT_TABLES, DATA_NOTES
+from utils.result_checks import result_issue
+import json
 from functools import lru_cache
 from Models.schema import AgentSchema, JudgeSchema
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -235,6 +237,15 @@ def execute_sql(state: AgentSchema) -> AgentSchema:
     execution_result = obj.execute_query(sql_query)
     return {"sql_query_execution_result": execution_result}
 
+# Check Result Node: the query ran, but does its result have the shape the question needs?
+def check_result(state: AgentSchema) -> AgentSchema:
+    try:
+        rows = json.loads(state.sql_query_execution_result)
+    except (json.JSONDecodeError, TypeError):
+        return {"result_issue": ""}
+    issue = result_issue(state.curated_ques, rows) if isinstance(rows, list) else ""
+    return {"result_issue": issue}
+
 # Fix SQL Node: called when the query failed with a database error
 def fix_sql(state: AgentSchema) -> AgentSchema:
 
@@ -243,6 +254,9 @@ def fix_sql(state: AgentSchema) -> AgentSchema:
     if state.refusal_type == "invalid_sql":
         problem = "The SQL guard could not parse your previous query."
         error = state.comments.removeprefix("Blocked by the SQL guard: ")
+    elif state.result_issue:
+        problem = "Your previous query ran, but its result doesn't fit the question."
+        error = state.result_issue
     else:
         problem = "Your previous query failed when it ran on the database."
         error = state.sql_query_execution_result
@@ -264,7 +278,7 @@ Return only the SQL query.
     corrected_sql = llm.invoke(sql_messages(request)).text
 
     return {"generated_sql_query": clean_sql(corrected_sql), "retry_count": state.retry_count + 1,
-            "refusal_type": ""}
+            "refusal_type": "", "result_issue": ""}
 
 
 # Represent the final answer Node
@@ -307,6 +321,7 @@ sql_agent_graph.add_node(generate_sql,name="generate_sql")
 sql_agent_graph.add_node(is_safe_sql,name="is_safe_sql")
 sql_agent_graph.add_node(canceled_sql,name="canceled_sql")
 sql_agent_graph.add_node(execute_sql,name="execute_sql")
+sql_agent_graph.add_node(check_result,name="check_result")
 sql_agent_graph.add_node(fix_sql,name="fix_sql")
 sql_agent_graph.add_node(represent_final_answer,name="represent_final_answer")
 
@@ -342,9 +357,25 @@ def after_execute_edge(state: AgentSchema) -> str:
     failed = state.sql_query_execution_result.startswith("Error executing query")
     if failed and state.retry_count < MAX_SQL_RETRIES:
         return "fix_sql"
-    return "represent_final_answer"
+    if failed:
+        return "represent_final_answer"
+    return "check_result"
 
 sql_agent_graph.add_conditional_edges("execute_sql", after_execute_edge,
+                                      {
+                                          "fix_sql": "fix_sql",
+                                          "check_result": "check_result",
+                                          "represent_final_answer": "represent_final_answer"
+                                      })
+
+# Sanity check: a result with the wrong shape (e.g. many rows for a "how many" question)
+# is rewritten within the same retry limit; after that, the answer is written anyway.
+def after_check_edge(state: AgentSchema) -> str:
+    if state.result_issue and state.retry_count < MAX_SQL_RETRIES:
+        return "fix_sql"
+    return "represent_final_answer"
+
+sql_agent_graph.add_conditional_edges("check_result", after_check_edge,
                                       {
                                           "fix_sql": "fix_sql",
                                           "represent_final_answer": "represent_final_answer"

@@ -1,0 +1,86 @@
+{
+  "run_at": "2026-10-11T18:39:11",
+  "question_set": "main",
+  "options": {
+    "set": "main",
+    "limit": null,
+    "ids": [
+      "h06"
+    ],
+    "category": null,
+    "no_judge": false,
+    "skip_safety": true,
+    "skip_routing": true
+  },
+  "sql": [
+    {
+      "id": "h06",
+      "category": "hard",
+      "question": "How many users have had both a failed payment and a refunded payment?",
+      "reference_result": "[{\"count\": 56}]",
+      "curated_question": "How many users have experienced at least one failed payment transaction and at least one refunded payment transaction?",
+      "generated_sql": "SELECT COUNT(*) AS user_count\nFROM (\n    SELECT p.user_id\n    FROM payments p\n    WHERE p.payment_status IN ('failed', 'refunded')\n    GROUP BY p.user_id\n    HAVING COUNT(*) FILTER (WHERE p.payment_status = 'failed') > 0\n       AND COUNT(*) FILTER (WHERE p.payment_status = 'refunded') > 0\n) AS sub;",
+      "is_safe": "Yes",
+      "safety_comments": "This query is a read-only SELECT statement that only retrieves data using aggregation (COUNT, GROUP BY, HAVING with FILTER clauses). It does not contain any data modification commands such as INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, or any DDL/DML statements that could alter the database structure or content. The query simply counts users who have both 'failed' and 'refunded' payment statuses. It is safe for execution.",
+      "result": "[{\"user_count\": 56}]",
+      "final_answer": "Based on the query results, **56 users** have experienced at least one failed payment transaction and at least one refunded payment transaction.",
+      "retries": 0,
+      "refusal_type": "",
+      "seconds": 6.65,
+      "input_tokens": 4652,
+      "output_tokens": 430,
+      "cache_read_tokens": 3108,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 1854.8,
+      "execution_match": true,
+      "execution_reason": "Match.",
+      "answer_correct": true,
+      "judge_reason": "The agent's answer of 56 users matches the correct result exactly."
+    }
+  ],
+  "safety": [],
+  "routing": [],
+  "database_unchanged": true,
+  "table_counts": {
+    "before": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000
+    },
+    "after": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000
+    }
+  },
+  "summary": {
+    "execution_accuracy": 1.0,
+    "answer_accuracy": 1.0,
+    "avg_seconds": 6.65,
+    "avg_input_tokens": 4652.0,
+    "avg_output_tokens": 430.0,
+    "cache_read_share": 0.6680997420464316,
+    "avg_billed_input_tokens": 1854.8,
+    "questions_retried": 0,
+    "questions_recovered": 0,
+    "by_category": {
+      "hard": {
+        "n": 1,
+        "exec": 1,
+        "ans": 1
+      }
+    },
+    "lines": [
+      "Execution accuracy:  1/1 (100.0%)",
+      "Answer accuracy:     1/1 (100.0%)  (LLM judge)",
+      "Avg per question:    6.7s, 4,652 input + 430 output tokens",
+      "Prompt cache:        66.8% of input tokens read from cache; billed input = 1,855 normal-price tokens per question",
+      "Self-correction:     0 question(s) needed a retry, 0 recovered",
+      "Database unchanged:  yes"
+    ]
+  }
+}

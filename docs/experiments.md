@@ -12,12 +12,14 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 | [EXP-06](#exp-06--conversation-memory) | 2026-10-10 | Conversation memory (follow-up questions) | follow-ups **100%** (42/42)⁴; main 97.9% | follow-ups 92.9% | 5,509 per follow-up turn |
 | [EXP-07](#exp-07--clear-follow-up-refusals-confident-answers-retry-on-invalid-sql) | 2026-10-10 | Clear follow-up refusals, confident top-1 answers, retry on invalid SQL | check set **100%** (18/18)⁵; fresh, follow-up, main and held-out **100%** | **100%** on every set | 5,792 per follow-up turn |
 | [EXP-08](#exp-08--prompt-caching) | 2026-10-10 | Prompt caching for the SQL context | main 97.9%, held-out **100%**, check **100%** | same | **1,861 billed** (−59%) of 4,582 |
+| [EXP-09](#exp-09--result-sanity-check) | 2026-10-11 | Result sanity check | main **100%** (47/47), held-out **100%** (20/20), h06 alone **5/5**⁶ | **100%** on every set | 4,671 (**1,815 billed**) |
 
 ¹ 95% as first scored; the one miss was a scoring bug (date vs midnight timestamp), fixed and re-scored.
 ² The one "incorrect" verdict was a judge error; its own reasoning found every value correct.
 ³ Main set run 3 times: 100%, 100% and 97.9% (140/141 question runs correct).
 ⁴ 14 follow-up conversations run 3 times; only the last turn of each is scored. The main set was run once as a regression check.
 ⁵ Final version: check set run 3 times; fresh and original follow-up sets once; main and held-out sets once after part 1 (part 2 doesn't change single-question SQL) and routing re-checked after part 2. All 16 follow-up change requests were clearly refused.
+⁶ h06 is the question that failed in 3 of the 6 main-set runs before this change. In these runs the sanity check caught its wrong-shape query twice (once in the 5 solo runs, once in the main run) and the rewritten query was correct both times.
 
 ---
 
@@ -494,6 +496,50 @@ The filtering logic is right, but the `COUNT` sits in the same query as `GROUP B
 3. **Time didn't change.** The model's thinking and writing take most of the time, so caching saves money rather than seconds here.
 
 **Next:** h06 is now the only failing question. A result sanity check (a "how many" question should return one row; if it returns many, rewrite the query) is the general fix and is already on the roadmap.
+
+## EXP-09 – Result sanity check
+
+**Goal:** catch queries that run without errors but return the wrong shape, the second item promised in the v2 post. The one question still failing, h06 ("How many users have had both a failed payment and a refunded payment?"), failed this way in three of the last six main-set runs: `COUNT(DISTINCT user_id)` inside a `GROUP BY user_id` returns 56 rows of 1 instead of one row saying 56.
+
+**Design:** a rule-based check after a successful query, so it costs no model call when the result is fine.
+- A question "asks for one value" when it starts like "How many", "How much", "What percentage", "What is the total / average / median / number..." and doesn't ask for a breakdown or a list ("each", "per", "by", "which", "top 3", "monthly", "broken down"...).
+- If such a question gets more than one row, the result goes back to the fix step with an explanation ("the question asks for a single value, but the query returned 56 rows..."), using the same limit of 2 retries. If the result is still wrong after that, the answer is written anyway, so the check can only add a retry and never blocks an answer.
+
+**Changes**
+
+| # | Change | File |
+|---|---|---|
+| 1 | `expects_single_value()` and `result_issue()` | `utils/result_checks.py` |
+| 2 | New `check_result` step after a successful query; a wrong shape goes to `fix_sql` with the explanation | `agents/sql_analyst.py`, `Models/schema.py` |
+| 3 | Step labels in the app ("Checked that the result fits the question", "Rewrote the query to fix a problem") | `agents/data_agent.py` |
+
+**Offline checks**
+- **No false alarms on any correct answer:** the rule was run against the reference results (and accepted alternatives) of all 99 questions in every eval set (47 main, 20 held-out, 32 follow-up intents). 52 were recognised as single-value questions, and none of the correct answers triggered the check.
+- With the stand-in model: the h06 mistake is caught, explained to the fix step, rewritten and answered with 56 (1 retry); a query that stays wrong stops after 2 retries and still gets an answer; breakdowns and correct answers aren't touched; every set still passes with 0 retries when the SQL is right.
+
+**Limits:** the rule only covers questions phrased as asking for one number. A wrong-shape answer to "Which city...?" isn't checked, and questions that start in other ways aren't either.
+
+**Results** (2026-10-11: h06 alone 5 times, then the main set and the held-out set once each)
+
+| Metric | EXP-08 (main / held-out) | EXP-09 h06 (5 runs) | EXP-09 main | EXP-09 held-out |
+|---|:---:|:---:|:---:|:---:|
+| Execution accuracy | 97.9% / 100% | **5/5** | **100%** (47/47) | **100%** (20/20) |
+| Answer accuracy (LLM judge) | 97.9% / 100% | **5/5** | **100%** | **100%** |
+| Questions that needed a retry (recovered) | 0 / 0 | 1 (1) | 1 (1), h06 | 0 |
+| Change requests refused / routing | 4/4, 8/8 / 3/3, 4/4 | – | 4/4, 8/8 | 3/3, 4/4 |
+| Share of input read from cache | 66.4% / 64.8% | 0%* then 67–68% | 67.9% | 68.1% |
+| Billed input tokens per question | 1,861 / 1,936 | 1,756–1,855 without a retry, 3,349 with one | **1,815** | **1,765** |
+| Time per question | 6.2 s / 5.5 s | 5.7–6.7 s without a retry, 11.6 s with one | 6.2 s | 5.8 s |
+
+\* The first solo run started with a cold cache (5,334 billed); a cache write is only paid once every 5 minutes.
+
+**Findings**
+1. **The check worked live, on the exact failure it was built for.** h06 wrote its wrong-shape query in 2 of 6 runs here (one solo run and the main run), about as often as before (3 of 6). Both times the check caught it, the fix step rewrote the query, and the final answer was correct. Before this change, both of those runs would have been misses.
+2. **No false alarms.** None of the 66 other questions in the main and held-out runs triggered a retry, which matches the offline check over all 99 reference answers. Safety (4/4, 3/3) and routing (8/8, 4/4) are unchanged and the database was untouched.
+3. **A caught mistake costs one extra step.** The retry adds about 5 seconds and about 1,500 billed input tokens to that one question; questions that pass the check pay nothing extra, since the check is plain code, not a model call. Averages are in line with EXP-08 (1,815 and 1,765 billed per question).
+4. **The retry loop has now fired live for the first time.** In every earlier run, retries were only exercised by the offline checks.
+
+**Limits that remain:** the rule only covers questions phrased as asking for one number, so it would not catch a wrong-shape answer to "Which city...?". And the underlying mistake still happens about a third of the time on h06: the check repairs it rather than preventing it, at the cost of the extra step.
 
 ---
 

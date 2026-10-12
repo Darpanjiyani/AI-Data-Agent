@@ -1,0 +1,86 @@
+{
+  "run_at": "2026-10-11T18:39:28",
+  "question_set": "main",
+  "options": {
+    "set": "main",
+    "limit": null,
+    "ids": [
+      "h06"
+    ],
+    "category": null,
+    "no_judge": false,
+    "skip_safety": true,
+    "skip_routing": true
+  },
+  "sql": [
+    {
+      "id": "h06",
+      "category": "hard",
+      "question": "How many users have had both a failed payment and a refunded payment?",
+      "reference_result": "[{\"count\": 56}]",
+      "curated_question": "How many users have experienced at least one failed payment transaction and at least one refunded payment transaction?",
+      "generated_sql": "SELECT COUNT(*) AS users_with_failed_and_refunded\nFROM (\n    SELECT user_id\n    FROM payments\n    WHERE payment_status IN ('failed', 'refunded')\n    GROUP BY user_id\n    HAVING COUNT(DISTINCT payment_status) = 2\n) AS sub;",
+      "is_safe": "Yes",
+      "safety_comments": "The query is a read-only SELECT statement that counts users with both 'failed' and 'refunded' payment statuses. It does not contain any data manipulation (INSERT, UPDATE, DELETE) or data definition (DROP, ALTER, CREATE) commands. It uses standard SQL constructs (subquery, GROUP BY, HAVING, COUNT) purely for retrieval purposes, posing no risk to database integrity or security.",
+      "result": "[{\"users_with_failed_and_refunded\": 56}]",
+      "final_answer": "Based on the query results, **56 users** have experienced at least one failed payment transaction and at least one refunded payment transaction.",
+      "retries": 1,
+      "refusal_type": "",
+      "seconds": 11.63,
+      "input_tokens": 8943,
+      "output_tokens": 878,
+      "cache_read_tokens": 6216,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 3348.6,
+      "execution_match": true,
+      "execution_reason": "Match.",
+      "answer_correct": true,
+      "judge_reason": "The agent's answer states 56 users, matching the correct result exactly."
+    }
+  ],
+  "safety": [],
+  "routing": [],
+  "database_unchanged": true,
+  "table_counts": {
+    "before": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000
+    },
+    "after": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000
+    }
+  },
+  "summary": {
+    "execution_accuracy": 1.0,
+    "answer_accuracy": 1.0,
+    "avg_seconds": 11.63,
+    "avg_input_tokens": 8943.0,
+    "avg_output_tokens": 878.0,
+    "cache_read_share": 0.6950687688695069,
+    "avg_billed_input_tokens": 3348.6,
+    "questions_retried": 1,
+    "questions_recovered": 1,
+    "by_category": {
+      "hard": {
+        "n": 1,
+        "exec": 1,
+        "ans": 1
+      }
+    },
+    "lines": [
+      "Execution accuracy:  1/1 (100.0%)",
+      "Answer accuracy:     1/1 (100.0%)  (LLM judge)",
+      "Avg per question:    11.6s, 8,943 input + 878 output tokens",
+      "Prompt cache:        69.5% of input tokens read from cache; billed input = 3,349 normal-price tokens per question",
+      "Self-correction:     1 question(s) needed a retry, 1 recovered",
+      "Database unchanged:  yes"
+    ]
+  }
+}

@@ -41,6 +41,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 - A 59-question evaluation harness with execution accuracy and LLM-as-a-judge scoring.
 - Accuracy raised from 89.4% to 99.3% (average of 3 runs) on 47 SQL questions, and 100% on 20 held-out questions.
 - Prompt caching cuts the billed input per question by about 59%, with no loss of accuracy on the held-out or follow-up sets.
+- A result sanity check catches queries that run but return the wrong shape (56 rows for a "how many" question) and rewrites them; it fixed the last flaky question both times it fired.
 - Conversation memory: follow-ups like "and in 2026?" or "how many rides did the top one take?" answered correctly in all 32 test conversations, and follow-up requests to change data ("delete them") refused.
 - Measured, documented improvement rounds: each change is evaluated before and after.
 - A Streamlit chat app that shows the answer, an automatic chart, the data and the exact SQL that was run.
@@ -69,6 +70,8 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
           SQL guard + LLM safety judge           (code runs in an isolated,
        5. Execute as read-only user               time-limited process)
           error? → rewrite and retry (max 2)
+          wrong shape (many rows for a
+          "how many")? → rewrite and retry
        6. Explain the answer
 ```
 
@@ -122,6 +125,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 - Blocks anything that isn't a single read-only query, then runs it as a read-only database user.
 - Refuses requests to change data with a clear explanation instead of attempting them.
 - Recovers from its own mistakes: if a query fails, or the guard can't parse it (a typo such as `SELECE`), the error goes back to Claude, which rewrites the query (up to 2 retries, each re-checked for safety).
+- Checks that a successful result fits the question: if a question asks for one number ("How many users...?") but the query returns many rows, for example a `COUNT` inside a `GROUP BY`, the query is rewritten within the same retry limit. The check is rule-based, so it adds no model call when the result is fine.
 - Returns results with column names and explains them in plain English. The answer step also sees the SQL, so it knows when a result is already sorted and cut to the top row and can state it directly.
 
 ### ETL Analyst
@@ -358,8 +362,11 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 | v2.3 | Same version, held-out set | **100%** | **100%** | 4,546 | 5.5 s |
 | v2.4 | Round 7: prompt caching for the SQL context (main set) | 97.9%¹ | 97.9% | 4,582 (**1,861 billed, −59%**) | 6.2 s |
 | v2.4 | Same version, held-out set | **100%** | **100%** | 4,554 (**1,936 billed, −57%**) | 5.5 s |
+| v2.5 | Round 8: result sanity check (main set) | **100%**² | **100%** | 4,671 (**1,815 billed**) | 6.2 s |
+| v2.5 | Same version, held-out set | **100%** | **100%** | 4,562 (**1,765 billed**) | 5.8 s |
 
 ¹ The one miss is h06, the same occasional mistake seen before caching; see [EXP-08](docs/experiments.md#exp-08--prompt-caching). Billed input = uncached input + 0.1 × cache reads + 1.25 × cache writes.
+² h06 still writes the wrong-shape query sometimes (2 of 6 runs in this round), but the sanity check now catches it and the rewritten query is correct; h06 passed 5/5 when run alone. See [EXP-09](docs/experiments.md#exp-09--result-sanity-check).
 
 Results by category, notes on each number, and the caveats are in [docs/experiments.md](docs/experiments.md#results-by-version); every round has its own write-up there.
 
@@ -386,7 +393,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - [x] Held-out evaluation questions
 - [ ] A fresh held-out set for single questions (the first one has informed a fix since EXP-07)
 - [x] Repeated eval runs to measure run-to-run variance
-- [ ] Result sanity checks (e.g. a "how many" question should return one row)
+- [x] Result sanity checks (e.g. a "how many" question should return one row)
 - [x] Retry when the guard finds invalid SQL, not only on database errors
 - [x] Show the SQL to the answer step, so a top-1 result is stated confidently
 
@@ -438,6 +445,7 @@ AI-Data-Agent/
 │   ├── sql_guard.py         # Rule-based read-only check
 │   ├── charts.py            # Picks a chart (metric, bar, line or none) for a result
 │   ├── usage.py             # Token usage, cache reads/writes and billed input tokens
+│   ├── result_checks.py     # Sanity check: does a successful result fit the question?
 │   ├── etl_tools.py         # API extraction, file reading, isolated code execution
 │   ├── feed_db.py           # Creates tables and loads the dataset
 │   └── llm_pick.py          # Model per step

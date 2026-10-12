@@ -30,7 +30,8 @@ SQL_STEP_LABELS = {
     "generate_sql": "Wrote the SQL query",
     "is_safe_sql": "Checked that the query is read-only",
     "execute_sql": "Ran the query as the read-only user",
-    "fix_sql": "The query failed, so it was rewritten",
+    "check_result": "Checked that the result fits the question",
+    "fix_sql": "Rewrote the query to fix a problem",
     "canceled_sql": "Refused the request",
     "represent_final_answer": "Wrote the answer",
 }
