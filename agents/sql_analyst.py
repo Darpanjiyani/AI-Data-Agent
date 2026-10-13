@@ -83,6 +83,7 @@ def curate_ques(state: AgentSchema) -> AgentSchema:
       "Delete them" after a list of failed payments becomes "Delete the failed payments
       that were listed"). Don't turn it into a question.
     - Keep the same meaning and do not add new requirements.
+    - Write it in the same language as the new message.
     Return ONLY the rewritten message as a single sentence, with no explanation,
     headings or alternatives.
 
@@ -303,6 +304,7 @@ def represent_final_answer(state: AgentSchema) -> AgentSchema:
     Here is the SQL query: {state.generated_sql_query} \n
     Here is the execution result: {execution_result} \n
     Here is the user's original question: {curated_question}
+    Reply in the same language as the user's own message: {state.user_question}
     """
 
     llm_response = llm.invoke(prompt).text  # Get the final answer from the LLM

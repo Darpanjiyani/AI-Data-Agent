@@ -541,6 +541,8 @@ The filtering logic is right, but the `COUNT` sits in the same query as `GROUP B
 
 **Limits that remain:** the rule only covers questions phrased as asking for one number, so it would not catch a wrong-shape answer to "Which city...?". And the underlying mistake still happens about a third of the time on h06: the check repairs it rather than preventing it, at the cost of the extra step.
 
+**Fix found while recording the demo (2026-10-13):** an English follow-up ("What's the average fare for completed rides from the top one?") was rewritten in Russian, and the answer came back in Russian too. Neither prompt said which language to use: the rewrite step now writes in the language of the user's message, and the answer step replies in the language of the user's own message (not the rewrite). The stand-in runs of all sets still pass; the check set is re-run live after the change.
+
 ---
 
 ## Template for new experiments
