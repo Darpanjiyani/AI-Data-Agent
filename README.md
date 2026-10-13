@@ -8,7 +8,7 @@ Ask questions about your data in plain English, and let a team of AI agents answ
 |:---:|:---:|:---:|:---:|
 | **89.4% → 99.3%** | **100%** | **100%** | **0 / 17**, all clearly refused |
 
-![Demo: a question answered with a chart, the data and the SQL that ran, then a delete request refused](docs/demo.gif)
+![Demo: a question answered with a chart, a follow-up about "the top one" understood as Montreal, then a vague delete request refused](docs/demo.gif)
 
 ---
 
