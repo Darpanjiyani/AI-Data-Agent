@@ -362,7 +362,7 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 | v2.3 | Same version, held-out set | **100%** | **100%** | 4,546 | 5.5 s |
 | v2.4 | Round 7: prompt caching for the SQL context (main set) | 97.9%¹ | 97.9% | 4,582 (**1,861 billed, −59%**) | 6.2 s |
 | v2.4 | Same version, held-out set | **100%** | **100%** | 4,554 (**1,936 billed, −57%**) | 5.5 s |
-| v2.5 | Round 8: result sanity check (main set) | **100%**² | **100%** | 4,671 (**1,815 billed**) | 6.2 s |
+| v2.5 | Round 8: result sanity check (main set) | **100%²** | **100%** | 4,671 (**1,815 billed**) | 6.2 s |
 | v2.5 | Same version, held-out set | **100%** | **100%** | 4,562 (**1,765 billed**) | 5.8 s |
 
 ¹ The one miss is h06, the same occasional mistake seen before caching; see [EXP-08](docs/experiments.md#exp-08--prompt-caching). Billed input = uncached input + 0.1 × cache reads + 1.25 × cache writes.
