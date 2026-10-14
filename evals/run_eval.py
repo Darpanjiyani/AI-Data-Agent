@@ -18,6 +18,7 @@ Usage (from the project root):
   uv run evals/run_eval.py                    # full run
   uv run evals/run_eval.py --limit 5          # first 5 questions of each type
   uv run evals/run_eval.py --set holdout      # held-out questions (generalisation check)
+  uv run evals/run_eval.py --set holdout2     # second held-out set, written 2026-10-14
   uv run evals/run_eval.py --ids s01 j07      # specific questions
   uv run evals/run_eval.py --category join    # one category
   uv run evals/run_eval.py --no-judge         # skip the LLM judge (cheaper)
@@ -54,6 +55,8 @@ QUESTION_SETS = {
     "main": PROJECT_ROOT / "evals" / "questions.json",
     # Held-out set: only for checking that improvements generalise. Never use it to design fixes.
     "holdout": PROJECT_ROOT / "evals" / "holdout_questions.json",
+    # Second held-out set, written after the first one had informed a fix (EXP-07). Same rule.
+    "holdout2": PROJECT_ROOT / "evals" / "holdout2_questions.json",
 }
 RESULTS_DIR = PROJECT_ROOT / "evals" / "results"
 TABLES_TO_WATCH = ["users", "vehicles", "rides", "payments", "ratings"]
@@ -259,7 +262,7 @@ def pct(part, whole):
 def main():
     parser = argparse.ArgumentParser(description="Evaluate the AI Data Agent.")
     parser.add_argument("--set", choices=sorted(QUESTION_SETS), default="main",
-                        help="Which question set to run: main (default) or holdout.")
+                        help="Which question set to run: main (default), holdout or holdout2.")
     parser.add_argument("--limit", type=int, help="Only run the first N questions of each type.")
     parser.add_argument("--ids", nargs="+", help="Only run these question ids.")
     parser.add_argument("--category", help="Only run questions in this category (simple, aggregation, join, date, tricky, safety, routing).")

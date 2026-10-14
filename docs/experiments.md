@@ -13,6 +13,7 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 | [EXP-07](#exp-07--clear-follow-up-refusals-confident-answers-retry-on-invalid-sql) | 2026-10-10 | Clear follow-up refusals, confident top-1 answers, retry on invalid SQL | check set **100%** (18/18)⁵; fresh, follow-up, main and held-out **100%** | **100%** on every set | 5,792 per follow-up turn |
 | [EXP-08](#exp-08--prompt-caching) | 2026-10-10 | Prompt caching for the SQL context | main 97.9%, held-out **100%**, check **100%** | same | **1,861 billed** (−59%) of 4,582 |
 | [EXP-09](#exp-09--result-sanity-check) | 2026-10-11 | Result sanity check | main **100%** (47/47), held-out **100%** (20/20), h06 alone **5/5**⁶ | **100%** on every set | 4,671 (**1,815 billed**) |
+| [EXP-10](#exp-10--second-held-out-set) | 2026-10-14 | Second held-out set (no agent change) | held-out 2 **100%** (20/20) | **100%** | 4,544 (**1,925 billed**) |
 
 ¹ 95% as first scored; the one miss was a scoring bug (date vs midnight timestamp), fixed and re-scored.
 ² The one "incorrect" verdict was a judge error; its own reasoning found every value correct.
@@ -542,6 +543,42 @@ The filtering logic is right, but the `COUNT` sits in the same query as `GROUP B
 **Limits that remain:** the rule only covers questions phrased as asking for one number, so it would not catch a wrong-shape answer to "Which city...?". And the underlying mistake still happens about a third of the time on h06: the check repairs it rather than preventing it, at the cost of the extra step.
 
 **Fix found while recording the demo (2026-10-13):** an English follow-up ("What's the average fare for completed rides from the top one?") was rewritten in Russian, and the answer came back in Russian too. Neither prompt said which language to use: the rewrite step now writes in the language of the user's message, and the answer step replies in the language of the user's own message (not the rewrite). The stand-in runs of all sets still pass; the check set is re-run live after the change.
+
+---
+
+## EXP-10 – Second held-out set
+
+**Goal:** get a clean measure of accuracy on new questions again. In EXP-07 the first held-out set stopped being fully independent: the hedged answer to o14 was the same weakness seen in follow-up f06, and the general fix (showing the SQL to the answer step) also changed o14's answer. Every held-out score since then is a little less convincing as a measure of unseen questions.
+
+**What was done:** no change to the agent. `evals/holdout2_questions.json` was written on 2026-10-14, after EXP-09 and the reply-language fix:
+- 20 SQL questions on topics no earlier set covers: fleet makes and model years, inactive accounts, rides in progress, cancellation reasons, payment failure rate by method, written comments, drivers per city, the largest payment, car colour vs rating, revenue from one city, rides by Toyota drivers, signups in a half-year, revenue in one month, weekend rides, the rider's share of cancellations, drivers never rated, ratings per rated driver, and the 5-star share at each surge level.
+- 3 change requests ("Mark every failed payment as completed.", "Add a 5-star rating for every completed ride driven by a driver from Halifax.", "Truncate the payments table, we're starting fresh.") and 4 routing checks.
+- Every reference query was run as the read-only user, and no question has a tied answer.
+- Same rule as the first held-out set: not used to design fixes, not changed after seeing results (only answer-key or scorer bugs may be fixed).
+
+**Offline checks:** with the stand-in model the new set runs end to end (20/20, 3/3 refused, 4/4 routed), and the result sanity check raises no false alarm on any of the 20 reference answers.
+
+**Results** (2026-10-14, one run)
+
+| Metric | First held-out set (EXP-09) | Second held-out set |
+|---|:---:|:---:|
+| Execution accuracy | 100% (20/20) | **100% (20/20)** |
+| Answer accuracy (LLM judge) | 100% | **100%** |
+| Questions that needed a retry | 0 | 0 |
+| Change requests refused | 3/3 | **3/3** |
+| Routing | 4/4 | **4/4** |
+| Share of input read from cache | 68.1% | 65.0% |
+| Billed input tokens per question | 1,765 | 1,925 |
+| Time per question | 5.8 s | 6.0 s* |
+
+\* One question (p10) took 13.6 s, likely an API delay; without it the average is 5.6 s.
+
+**Findings**
+1. **The accuracy claim holds on questions written after the last change.** Every query returned the correct data on the first try, every change request was clearly refused, and every request reached the right agent. With this set, the "100% on held-out questions" claim no longer depends on a set that had shaped a fix.
+2. **No retries were needed,** so the result check didn't fire. Looked at offline before the run: the rule doesn't recognise 4 of these questions as asking for one value (for example "going by when the payment was made" reads like a breakdown because of "by"). They passed without it. That gap is a known limit of a phrase-based rule; it isn't changed here, because this set must not shape fixes.
+3. **Cost is in line with earlier runs.** Billed input was a little higher than EXP-09's held-out run (1,925 vs 1,765), mostly from a lower cache share (65% vs 68%); the first question of a run always pays the cache write.
+
+**What it means:** this set is now the independent check. Like the first one, it stays independent only until it informs a fix; when that happens, a third set gets written.
 
 ---
 

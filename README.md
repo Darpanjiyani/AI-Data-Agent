@@ -4,7 +4,7 @@ Ask questions about your data in plain English, and let a team of AI agents answ
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue) ![LangGraph](https://img.shields.io/badge/LangGraph-multi--agent-purple) ![Claude](https://img.shields.io/badge/LLM-Claude-orange) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-read--only-336791)
 
-| Execution accuracy (47 questions, avg of 3 runs) | Held-out set (20 unseen questions) | Follow-up conversations (32) | Change requests executed |
+| Execution accuracy (47 questions, avg of 3 runs) | Held-out sets (2 × 20 unseen questions) | Follow-up conversations (32) | Change requests executed |
 |:---:|:---:|:---:|:---:|
 | **89.4% → 99.3%** | **100%** | **100%** | **0 / 17**, all clearly refused |
 
@@ -39,7 +39,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 **Highlights**
 - Three independent layers of SQL safety; unsafe requests are never executed.
 - A 59-question evaluation harness with execution accuracy and LLM-as-a-judge scoring.
-- Accuracy raised from 89.4% to 99.3% (average of 3 runs) on 47 SQL questions, and 100% on 20 held-out questions.
+- Accuracy raised from 89.4% to 99.3% (average of 3 runs) on 47 SQL questions, and 100% on two held-out sets of 20 questions each, the second written after the last change to the agent.
 - Prompt caching cuts the billed input per question by about 59%, with no loss of accuracy on the held-out or follow-up sets.
 - A result sanity check catches queries that run but return the wrong shape (56 rows for a "how many" question) and rewrites them; it fixed the last flaky question both times it fired.
 - Conversation memory: follow-ups like "and in 2026?" or "how many rides did the top one take?" answered correctly in all 32 test conversations, and follow-up requests to change data ("delete them") refused.
@@ -77,7 +77,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 
 | Component | File | Role |
 |---|---|---|
-| Router + memory | `agents/data_agent.py` | Structured-output classification (`sql` / `etl`); a LangGraph checkpointer keeps each chat's messages |
+| Router + memory | `agents/data_agent.py` | Structured-output classification (`sql` / `etl`); a LangGraph checkpointer keeps each chat's messages (SQLite in the app, in memory for evals) |
 | Service | `agents/service.py` | `ask(question, thread_id)`: one call for any interface, returns answer, SQL, rows and steps |
 | SQL Analyst | `agents/sql_analyst.py` | LangGraph pipeline from question to answer |
 | ETL Analyst | `agents/etl_analyst.py` | ReAct-style tool-calling loop |
@@ -109,12 +109,13 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 
 ### Chat app
 - Ask questions in a chat interface (`uv run streamlit run app.py`).
-- **Follow-up questions:** ask "And in 2026?" or "Break that down by city" and the agent uses the conversation to understand it. A line under the badges shows how a follow-up was understood, and "Clear chat" starts a new conversation.
+- **Follow-up questions:** ask "And in 2026?" or "Break that down by city" and the agent uses the conversation to understand it. A line under the badges shows how a follow-up was understood.
+- **Chat history:** past chats are listed in the sidebar, titled by their first question, and saved in a local SQLite file (`chat_history/`, ignored by git). Reopen one and keep asking follow-ups, even after a restart: the agent's memory of each chat is saved in the same file. "New chat" starts a fresh conversation, and a chat can be deleted.
 - Each answer shows which agent handled it, plus a badge when a request was refused or a query was self-corrected.
 - Live progress while the agent works: understanding the question, writing SQL, safety check, running the query.
 - **Automatic charts:** a single number becomes a headline metric, a breakdown becomes a bar chart (in the query's order), and a time series becomes a line chart. Lists of records stay as a table. When a result has several numbers (e.g. total rides and cancellation rate), you can choose which one to chart.
 - The result table and the exact SQL behind every answer, so answers can be checked.
-- Time and token usage for each answer, and example questions in the sidebar.
+- Time and token usage for each answer, and example questions on the start screen of a new chat.
 
 ### SQL Analyst
 - Converts natural-language questions into PostgreSQL.
@@ -174,7 +175,7 @@ python -m venv .venv
 # macOS / Linux
 source .venv/bin/activate
 
-pip install dotenv ipython langchain langchain-anthropic langgraph pandas psycopg2-binary pydantic requests sqlglot pyarrow streamlit
+pip install dotenv ipython langchain langchain-anthropic langgraph langgraph-checkpoint-sqlite pandas psycopg2-binary pydantic requests sqlglot pyarrow streamlit
 ```
 
 </details>
@@ -323,6 +324,7 @@ uv run evals/run_eval.py --category hard     # one category
 uv run evals/run_eval.py --ids s01 t01       # specific questions
 uv run evals/run_eval.py --no-judge          # skip the LLM judge (cheaper)
 uv run evals/run_eval.py --set holdout       # held-out questions (see below)
+uv run evals/run_eval.py --set holdout2      # second held-out set (see below)
 uv run evals/run_followup_eval.py            # follow-up conversations (see below)
 uv run evals/run_followup_eval.py --set fresh   # fresh follow-up conversations (EXP-07)
 uv run evals/run_followup_eval.py --set check   # final check conversations (EXP-07)
@@ -332,6 +334,8 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 
 ### Held-out set
 `evals/holdout_questions.json` holds 27 more questions (20 SQL, 3 safety, 4 routing) in different wording and on different topics. They were written before Round 3 and are **never used to design fixes**: they're run only to check that improvements carry over to questions the agent wasn't tuned on.
+
+In EXP-07 one held-out question (o14) showed the same weakness as a follow-up conversation, and the general fix for it also changed o14's answer. From then on the set had helped shape the agent, so `evals/holdout2_questions.json` (20 SQL, 3 safety, 4 routing, written on 2026-10-14) replaces it as the independent check, under the same rule.
 
 ### Follow-up conversations
 `evals/followup_questions.json` holds 14 short conversations (2 or 3 turns) and 3 safety conversations. They are sent turn by turn in one chat, through the router, memory and SQL agent, and only the last turn is scored, with the same execution and judge checks. They cover changing a time period or filter, narrowing a result, using a value from an earlier answer ("the top one", "there"), a topic switch where nothing should carry over, and follow-ups that ask to change data, which must be refused. The report shows how each follow-up was understood. `evals/followup_fresh_questions.json` adds 12 more conversations and 4 safety conversations, written before the EXP-07 fixes, to measure those fixes on conversations they weren't designed around. `evals/followup_check_questions.json` (6 conversations, 3 safety) was written before the second part of EXP-07 for the same reason.
@@ -364,6 +368,7 @@ Each run writes a Markdown report (summary, per-question results, and every fail
 | v2.4 | Same version, held-out set | **100%** | **100%** | 4,554 (**1,936 billed, −57%**) | 5.5 s |
 | v2.5 | Round 8: result sanity check (main set) | **100%²** | **100%** | 4,671 (**1,815 billed**) | 6.2 s |
 | v2.5 | Same version, held-out set | **100%** | **100%** | 4,562 (**1,765 billed**) | 5.8 s |
+| v2.5 | Same version, **second held-out set** (20 questions written after the last change) | **100%** | **100%** | 4,544 (**1,925 billed**) | 6.0 s |
 
 ¹ The one miss is h06, the same occasional mistake seen before caching; see [EXP-08](docs/experiments.md#exp-08--prompt-caching). Billed input = uncached input + 0.1 × cache reads + 1.25 × cache writes.
 ² h06 still writes the wrong-shape query sometimes (2 of 6 runs in this round), but the sanity check now catches it and the rewritten query is correct; h06 passed 5/5 when run alone. See [EXP-09](docs/experiments.md#exp-09--result-sanity-check).
@@ -391,7 +396,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - [x] Self-correcting SQL: retry with the database error
 - [x] Conversation memory with a LangGraph checkpointer
 - [x] Held-out evaluation questions
-- [ ] A fresh held-out set for single questions (the first one has informed a fix since EXP-07)
+- [x] A fresh held-out set for single questions (`holdout2_questions.json`: 20/20, EXP-10)
 - [x] Repeated eval runs to measure run-to-run variance
 - [x] Result sanity checks (e.g. a "how many" question should return one row)
 - [x] Retry when the guard finds invalid SQL, not only on database errors
@@ -404,6 +409,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 
 **Features**
 - [x] Streamlit chat interface with the answer, generated SQL and result table
+- [x] Saved chat history in the sidebar, with New chat and delete
 - [x] Automatic charts for query results
 - [ ] Load transformed data into PostgreSQL with human approval
 - [ ] Pagination and authentication for API extraction
@@ -420,10 +426,9 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 
 **Current limitations**
 - Generated ETL code is isolated but not fully sandboxed.
-- Conversation memory lasts while the app is running (in-memory checkpointer); a database-backed checkpointer would keep chats across restarts.
 - Follow-ups use the last 3 exchanges; something mentioned earlier than that is forgotten.
 - Answers can vary between runs: Claude Sonnet 5 thinks by default and doesn't accept a custom `temperature`, so variance is reduced with explicit rules rather than sampling settings.
-- Self-correction only catches queries that fail; a query that runs but answers the wrong question isn't caught yet.
+- The result check only covers questions phrased as asking for one number; a query that runs but answers a different question in some other way isn't caught.
 - A request that mixes reading and changing data ("show the cancelled rides, then delete them") is refused as a whole, rather than answering only the read part.
 
 ---
@@ -446,12 +451,14 @@ AI-Data-Agent/
 │   ├── charts.py            # Picks a chart (metric, bar, line or none) for a result
 │   ├── usage.py             # Token usage, cache reads/writes and billed input tokens
 │   ├── result_checks.py     # Sanity check: does a successful result fit the question?
+│   ├── chat_store.py        # Saved chats for the app (SQLite)
 │   ├── etl_tools.py         # API extraction, file reading, isolated code execution
 │   ├── feed_db.py           # Creates tables and loads the dataset
 │   └── llm_pick.py          # Model per step
 ├── evals/
 │   ├── questions.json       # Evaluation questions with reference SQL
 │   ├── holdout_questions.json  # Held-out questions, never used to design fixes
+│   ├── holdout2_questions.json # Second held-out set, written 2026-10-14
 │   ├── followup_questions.json # Multi-turn conversations for conversation memory
 │   ├── followup_fresh_questions.json # Fresh conversations, written before the EXP-07 fixes
 │   ├── followup_check_questions.json # Final check conversations for EXP-07 part 2
