@@ -211,10 +211,26 @@ data_agent_graph.add_conditional_edges("router_node", route_edge,
 data_agent_graph.add_edge("sql_node", END)
 data_agent_graph.add_edge("etl_node", END)
 
-# The checkpointer keeps each chat's messages, keyed by the thread_id passed in the
-# config, so follow-up questions can refer to earlier ones. InMemorySaver lives as long
-# as the process; swap in a database-backed saver to keep chats across restarts.
-data_agent = data_agent_graph.compile(checkpointer=InMemorySaver())
+def make_checkpointer():
+    """Where each chat's messages are kept, keyed by the thread_id in the config.
+
+    Set AGENT_MEMORY_DB to a file path (the Streamlit app does) to keep chats across
+    restarts in SQLite. Without it, memory lives only as long as the process, which is
+    what the evals want: every run starts clean."""
+    path = os.getenv("AGENT_MEMORY_DB")
+    if not path:
+        return InMemorySaver()
+    import sqlite3
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    # Streamlit answers each browser session on its own thread, so the connection is shared
+    saver = SqliteSaver(sqlite3.connect(path, check_same_thread=False))
+    saver.setup()
+    return saver
+
+
+# The checkpointer keeps each chat's messages, so follow-up questions can refer to earlier ones.
+data_agent = data_agent_graph.compile(checkpointer=make_checkpointer())
 
 
 if __name__ == "__main__":

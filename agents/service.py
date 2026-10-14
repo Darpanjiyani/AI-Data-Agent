@@ -77,6 +77,11 @@ def ask(question: str, thread_id: str = "default", on_step: StepCallback = None)
     return reply
 
 
+def forget(thread_id: str) -> None:
+    """Remove the agent's memory of one conversation (used when a chat is deleted)."""
+    data_agent.checkpointer.delete_thread(thread_id)
+
+
 if __name__ == "__main__":
     for message in ["How many rides were requested in each month of 2025?", "And in 2026?"]:
         reply = ask(message, thread_id="demo", on_step=print)

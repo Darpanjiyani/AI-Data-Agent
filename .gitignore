@@ -9,3 +9,6 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# Saved chats from the Streamlit app (may contain your questions and results)
+chat_history/

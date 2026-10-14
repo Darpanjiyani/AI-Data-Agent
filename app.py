@@ -7,7 +7,6 @@ Run from the project root:
 
 import json
 import os
-import uuid
 from pathlib import Path
 
 import streamlit as st
@@ -16,18 +15,35 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(PROJECT_ROOT / ".env")
 
+from utils import chat_store  # noqa: E402
 from utils.charts import build_chart, plan_chart, pretty, to_dataframe  # noqa: E402
+
+# The agent keeps its memory of each chat in the same file as the saved chats, so a chat
+# reopened after a restart still understands follow-ups. (The evals don't set this, so
+# their runs always start with empty memory.)
+os.environ.setdefault("AGENT_MEMORY_DB", str(chat_store.CHAT_DB))
 
 st.set_page_config(page_title="AI Data Agent", page_icon="🤖", layout="centered")
 
 EXAMPLES = [
-    "How many rides are there for each ride status?",
-    "How many rides were requested in each month of 2025?",
-    "Which 3 users spent the most on completed payments?",
-    "What percentage of payments have a failed status?",
-    "What is the average fare of completed rides?",
+    "How many rides are in each status?",
+    "How many rides per month in 2025?",
+    "Who are our top 3 spenders?",
+    "What share of payments failed?",
+    "What's the average fare of a completed ride?",
     "Delete all cancelled rides.",
 ]
+
+# Chat titles in the sidebar: left-aligned on one line, like a chat app's history list
+SIDEBAR_CSS = """
+<style>
+div[class*="st-key-chat_"] button { justify-content: flex-start; }
+div[class*="st-key-chat_"] button div { justify-content: flex-start; min-width: 0; }
+div[class*="st-key-chat_"] button p {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left;
+}
+</style>
+"""
 
 REFUSAL_LABELS = {
     "write_request": "Refused: change request",
@@ -74,7 +90,7 @@ def format_number(value) -> str:
     return f"{int(value):,}"
 
 
-def render_result(reply, index: int) -> None:
+def render_result(reply, key: str) -> None:
     """Chart (when one fits), then the data and the SQL behind the answer."""
     rows = reply.rows
     plan = plan_chart(rows)
@@ -88,7 +104,7 @@ def render_result(reply, index: int) -> None:
         measure = plan.measures[0]
         if len(plan.measures) > 1:
             measure = st.selectbox("Chart shows", plan.measures, format_func=pretty,
-                                   key=f"measure_{index}")
+                                   key=f"measure_{key}")
         st.altair_chart(build_chart(plan, measure, chart_color()), width="stretch")
 
     if rows is not None:
@@ -100,7 +116,7 @@ def render_result(reply, index: int) -> None:
                 st.write("The query returned no rows.")
 
 
-def render_reply(reply, index: int) -> None:
+def render_reply(reply, key: str) -> None:
     # Badges: which agent answered, and anything unusual
     badges = st.container(horizontal=True, gap="small")
     with badges:
@@ -130,7 +146,7 @@ def render_reply(reply, index: int) -> None:
         st.markdown(escape_markdown(reply.answer))
 
     if reply.route == "sql" and not reply.refused:
-        render_result(reply, index)
+        render_result(reply, key)
 
     if reply.sql and reply.sql.strip().upper() != "WRITE_REQUEST":
         with st.expander("SQL query", icon=":material/code:"):
@@ -153,37 +169,82 @@ def render_reply(reply, index: int) -> None:
     st.caption(f"{reply.seconds:.1f} s · {tokens:,} tokens{cached}")
 
 
+# ------------------------------------------------------------------ chats
+
+# Run locally, every chat belongs to "local". A public demo would pass a per-browser id,
+# so visitors only ever see their own chats.
+VISITOR_ID = "local"
+
+chat_store.setup()
+st.session_state.setdefault("chat_id", None)      # the open chat; None = a new, empty chat
+st.session_state.setdefault("awaiting", None)     # a question sent but not answered yet
+
+
+def open_chat(chat_id) -> None:
+    st.session_state.chat_id = chat_id
+    st.session_state.awaiting = None
+
+
+def send(question: str) -> None:
+    """Start a chat if needed, then answer on the next run (so the sidebar already lists it)."""
+    if st.session_state.chat_id is None:
+        st.session_state.chat_id = chat_store.create_chat(VISITOR_ID, question)
+    st.session_state.awaiting = question
+
+
+def load_history(chat_id) -> list:
+    if chat_id is None:
+        return []
+    items = []
+    for message in chat_store.load_messages(chat_id, VISITOR_ID):
+        if message["role"] == "user":
+            items.append({"role": "user", "content": message["content"]})
+        else:
+            service = load_agent()
+            items.append({"role": "assistant",
+                          "reply": service.AgentReply(**json.loads(message["content"]))})
+    return items
+
+
 # ------------------------------------------------------------------ sidebar
 
-if "history" not in st.session_state:
-    st.session_state.history = []
-if "thread_id" not in st.session_state:
-    # One conversation per browser session; the agent remembers it for follow-ups
-    st.session_state.thread_id = uuid.uuid4().hex
+st.markdown(SIDEBAR_CSS, unsafe_allow_html=True)
 
 with st.sidebar:
     st.title("🤖 AI Data Agent")
     st.caption("Ask questions about the ride-sharing database in plain English.")
 
-    st.subheader("Try a question")
-    for example in EXAMPLES:
-        if st.button(example, width="stretch", key=f"example_{example}"):
-            st.session_state.pending = example
+    st.button("New chat", icon=":material/edit_square:", width="stretch", type="primary",
+              on_click=open_chat, args=(None,), disabled=st.session_state.chat_id is None)
 
-    st.subheader("How it stays safe")
-    st.markdown(
-        "- Connects as a **read-only** database user\n"
-        "- Every query passes a rule-based SQL check and an AI safety review\n"
-        "- Requests to change data are refused, not run"
-    )
+    st.subheader("Chats")
+    chats = chat_store.list_chats(VISITOR_ID)
+    if not chats:
+        st.caption("Your chats will appear here.")
+    for chat in chats:
+        is_open = chat["chat_id"] == st.session_state.chat_id
+        st.button(chat["title"], key=f"chat_{chat['chat_id']}", width="stretch",
+                  type="secondary" if is_open else "tertiary",
+                  icon=":material/chat_bubble:" if is_open else ":material/chat_bubble_outline:",
+                  on_click=open_chat, args=(chat["chat_id"],))
 
-    st.caption("Follow-up questions work: after a question, try \"And in 2026?\" or "
-               "\"Break that down by city.\" Clear chat starts a new conversation.")
-
-    if st.button("Clear chat", icon=":material/delete:", width="stretch"):
-        st.session_state.history = []
-        st.session_state.thread_id = uuid.uuid4().hex  # the agent forgets the old chat
-        st.rerun()
+    st.divider()
+    with st.expander("How it stays safe", icon=":material/shield:"):
+        st.markdown(
+            "- Connects as a **read-only** database user\n"
+            "- Every query passes a rule-based SQL check and an AI safety review\n"
+            "- Requests to change data are refused, not run"
+        )
+    if st.session_state.chat_id is not None and st.session_state.awaiting is None:
+        if st.button("Delete this chat", icon=":material/delete:", width="stretch"):
+            chat_id = st.session_state.chat_id
+            chat_store.delete_chat(chat_id, VISITOR_ID)
+            try:
+                load_agent().forget(chat_id)  # the agent forgets it too
+            except Exception:
+                pass
+            open_chat(None)
+            st.rerun()
 
 
 # ------------------------------------------------------------------ main
@@ -198,26 +259,37 @@ if missing:
     )
     st.stop()
 
-if not st.session_state.history:
+chat_id = st.session_state.chat_id
+history = load_history(chat_id)
+
+if not history and st.session_state.awaiting is None:
     st.markdown("### What would you like to know?")
     st.markdown(
-        "Ask about **users, drivers, vehicles, rides, payments or ratings**, or pick a "
-        "question from the sidebar. You'll see the answer, a chart when one fits, the "
-        "data and the exact SQL that was run. Ask follow-ups as you would a colleague."
+        "Ask about **users, drivers, vehicles, rides, payments or ratings**. You'll see the "
+        "answer, a chart when one fits, the data and the exact SQL that was run. "
+        "Follow-ups work too: try \"And in 2026?\" after a question."
     )
+    st.caption("Try one of these")
+    columns = st.columns(2)
+    for number, example in enumerate(EXAMPLES):
+        columns[number % 2].button(example, key=f"example_{number}", width="stretch",
+                                   on_click=send, args=(example,))
 
-for index, item in enumerate(st.session_state.history):
+for index, item in enumerate(history):
     with st.chat_message(item["role"]):
         if item["role"] == "user":
             st.markdown(escape_markdown(item["content"]))
         else:
-            render_reply(item["reply"], index)
+            render_reply(item["reply"], f"{chat_id}_{index}")
 
-question = st.chat_input("Ask a question about the data...")
-question = question or st.session_state.pop("pending", None)
-
+question = st.chat_input("Ask a question about the data...",
+                         disabled=st.session_state.awaiting is not None)
 if question:
-    st.session_state.history.append({"role": "user", "content": question})
+    send(question)
+    st.rerun()
+
+question = st.session_state.awaiting
+if question:
     with st.chat_message("user"):
         st.markdown(escape_markdown(question))
 
@@ -225,15 +297,20 @@ if question:
         try:
             service = load_agent()
             with st.status("Working on it...", expanded=True) as status:
-                reply = service.ask(question, thread_id=st.session_state.thread_id,
+                reply = service.ask(question, thread_id=chat_id,
                                     on_step=lambda step: status.write(f"✓ {step}"))
                 status.update(label=f"Done in {reply.seconds:.1f} s", state="complete",
                               expanded=False)
         except Exception as error:  # e.g. database down, invalid API key
+            st.session_state.awaiting = None
+            if not history:  # nothing was saved in this chat, so don't keep an empty one
+                chat_store.delete_chat(chat_id, VISITOR_ID)
+                st.session_state.chat_id = None
             st.error(f"Something went wrong: {error}", icon=":material/error:")
-            st.session_state.history.pop()
             st.stop()
 
-        index = len(st.session_state.history)
-        st.session_state.history.append({"role": "assistant", "reply": reply})
-        render_reply(reply, index)
+        chat_store.add_message(chat_id, "user", question)
+        chat_store.add_reply(chat_id, reply)
+        st.session_state.awaiting = None
+        render_reply(reply, f"{chat_id}_{len(history) + 1}")
+    st.rerun()  # moves the chat to the top of the list and re-enables the input
