@@ -1,0 +1,152 @@
+[
+ {
+  "id": 1,
+  "name": "Avery Singh",
+  "username": "avery1",
+  "email": "avery.singh@example.com",
+  "address": {
+   "street": "100 Example St",
+   "city": "Toronto",
+   "province": "ON",
+   "postal_code": "X0X 0X0"
+  },
+  "company": {
+   "name": "Test Co 1"
+  }
+ },
+ {
+  "id": 2,
+  "name": "Jordan Tremblay",
+  "username": "jordan2",
+  "email": "jordan.tremblay@example.com",
+  "address": {
+   "street": "107 Example St",
+   "city": "Montreal",
+   "province": "QC",
+   "postal_code": "X1X 1X1"
+  },
+  "company": {
+   "name": "Test Co 2"
+  }
+ },
+ {
+  "id": 3,
+  "name": "Priya Nguyen",
+  "username": "priya3",
+  "email": "priya.nguyen@example.com",
+  "address": {
+   "street": "114 Example St",
+   "city": "Vancouver",
+   "province": "BC",
+   "postal_code": "X2X 2X2"
+  },
+  "company": {
+   "name": "Test Co 3"
+  }
+ },
+ {
+  "id": 4,
+  "name": "Mateo Roy",
+  "username": "mateo4",
+  "email": "mateo.roy@example.com",
+  "address": {
+   "street": "121 Example St",
+   "city": "Calgary",
+   "province": "AB",
+   "postal_code": "X3X 3X3"
+  },
+  "company": {
+   "name": "Test Co 1"
+  }
+ },
+ {
+  "id": 5,
+  "name": "Chloe Martin",
+  "username": "chloe5",
+  "email": "chloe.martin@example.com",
+  "address": {
+   "street": "128 Example St",
+   "city": "Halifax",
+   "province": "NS",
+   "postal_code": "X4X 4X4"
+  },
+  "company": {
+   "name": "Test Co 2"
+  }
+ },
+ {
+  "id": 6,
+  "name": "Noah Gagnon",
+  "username": "noah6",
+  "email": "noah.gagnon@example.com",
+  "address": {
+   "street": "135 Example St",
+   "city": "Toronto",
+   "province": "ON",
+   "postal_code": "X5X 5X5"
+  },
+  "company": {
+   "name": "Test Co 3"
+  }
+ },
+ {
+  "id": 7,
+  "name": "Aisha Patel",
+  "username": "aisha7",
+  "email": "aisha.patel@example.com",
+  "address": {
+   "street": "142 Example St",
+   "city": "Montreal",
+   "province": "QC",
+   "postal_code": "X6X 6X6"
+  },
+  "company": {
+   "name": "Test Co 1"
+  }
+ },
+ {
+  "id": 8,
+  "name": "Liam Wilson",
+  "username": "liam8",
+  "email": "liam.wilson@example.com",
+  "address": {
+   "street": "149 Example St",
+   "city": "Vancouver",
+   "province": "BC",
+   "postal_code": "X7X 7X7"
+  },
+  "company": {
+   "name": "Test Co 2"
+  }
+ },
+ {
+  "id": 9,
+  "name": "Mei Chen",
+  "username": "mei9",
+  "email": "mei.chen@example.com",
+  "address": {
+   "street": "156 Example St",
+   "city": "Calgary",
+   "province": "AB",
+   "postal_code": "X8X 8X8"
+  },
+  "company": {
+   "name": "Test Co 3"
+  }
+ },
+ {
+  "id": 10,
+  "name": "Omar Brown",
+  "username": "omar10",
+  "email": "omar.brown@example.com",
+  "address": {
+   "street": "163 Example St",
+   "city": "Halifax",
+   "province": "NS",
+   "postal_code": "X9X 9X9"
+  },
+  "company": {
+   "name": "Test Co 1"
+  }
+ }
+]

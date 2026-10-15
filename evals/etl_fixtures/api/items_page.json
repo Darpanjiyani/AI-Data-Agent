@@ -1,0 +1,39 @@
+{
+ "count": 8,
+ "next": null,
+ "previous": null,
+ "results": [
+  {
+   "name": "bulbasaur",
+   "url": "https://example.com/api/item/1/"
+  },
+  {
+   "name": "ivysaur",
+   "url": "https://example.com/api/item/2/"
+  },
+  {
+   "name": "venusaur",
+   "url": "https://example.com/api/item/3/"
+  },
+  {
+   "name": "charmander",
+   "url": "https://example.com/api/item/4/"
+  },
+  {
+   "name": "charmeleon",
+   "url": "https://example.com/api/item/5/"
+  },
+  {
+   "name": "charizard",
+   "url": "https://example.com/api/item/6/"
+  },
+  {
+   "name": "squirtle",
+   "url": "https://example.com/api/item/7/"
+  },
+  {
+   "name": "wartortle",
+   "url": "https://example.com/api/item/8/"
+  }
+ ]
+}

@@ -1,6 +1,6 @@
 # Experiment Log
 
-Every change to the agent is recorded here: what was changed, why, how it was measured, and what happened. Results come from `evals/run_eval.py` unless stated otherwise.
+Every change to the agent is recorded here: what was changed, why, how it was measured, and what happened. Results come from `evals/run_eval.py` unless stated otherwise. The ETL Analyst's experiments (EXP-11 onwards) are written up in [experiments-etl.md](experiments-etl.md); the table below lists every experiment.
 
 | ID | Date | Change | Execution accuracy | Answer accuracy | Input tokens / question |
 |---|---|---|:---:|:---:|:---:|
@@ -14,6 +14,7 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 | [EXP-08](#exp-08--prompt-caching) | 2026-10-10 | Prompt caching for the SQL context | main 97.9%, held-out **100%**, check **100%** | same | **1,861 billed** (−59%) of 4,582 |
 | [EXP-09](#exp-09--result-sanity-check) | 2026-10-11 | Result sanity check | main **100%** (47/47), held-out **100%** (20/20), h06 alone **5/5**⁶ | **100%** on every set | 4,671 (**1,815 billed**) |
 | [EXP-10](#exp-10--second-held-out-set) | 2026-10-14 | Second held-out set (no agent change) | held-out 2 **100%** (20/20) | **100%** | 4,544 (**1,925 billed**) |
+| [EXP-11](experiments-etl.md#exp-11--etl-evaluation-and-baseline) | 2026-10-15 | ETL Analyst: evaluation and baseline (17 tasks, no agent change) | ETL **18/18** (incl. live Open-Meteo) | – | 4,016 per task |
 
 ¹ 95% as first scored; the one miss was a scoring bug (date vs midnight timestamp), fixed and re-scored.
 ² The one "incorrect" verdict was a judge error; its own reasoning found every value correct.

@@ -328,6 +328,8 @@ uv run evals/run_eval.py --set holdout2      # second held-out set (see below)
 uv run evals/run_followup_eval.py            # follow-up conversations (see below)
 uv run evals/run_followup_eval.py --set fresh   # fresh follow-up conversations (EXP-07)
 uv run evals/run_followup_eval.py --set check   # final check conversations (EXP-07)
+uv run evals/run_etl_eval.py                 # ETL Analyst: 17 extract, transform and safety tasks
+uv run evals/run_etl_eval.py --live          # ... plus one task against the real Open-Meteo API
 ```
 
 Each run writes a Markdown report (summary, per-question results, and every failure with its generated SQL) and a JSON file to `evals/results/`.
@@ -339,6 +341,9 @@ In EXP-07 one held-out question (o14) showed the same weakness as a follow-up co
 
 ### Follow-up conversations
 `evals/followup_questions.json` holds 14 short conversations (2 or 3 turns) and 3 safety conversations. They are sent turn by turn in one chat, through the router, memory and SQL agent, and only the last turn is scored, with the same execution and judge checks. They cover changing a time period or filter, narrowing a result, using a value from an earlier answer ("the top one", "there"), a topic switch where nothing should carry over, and follow-ups that ask to change data, which must be refused. The report shows how each follow-up was understood. `evals/followup_fresh_questions.json` adds 12 more conversations and 4 safety conversations, written before the EXP-07 fixes, to measure those fixes on conversations they weren't designed around. `evals/followup_check_questions.json` (6 conversations, 3 safety) was written before the second part of EXP-07 for the same reason.
+
+### ETL tasks
+`evals/etl_tasks.py` holds 17 tasks for the ETL Analyst (5 extract, 9 transform, 3 safety), each with a short pandas reference that produces the correct output. The runner serves the test data from a local web server, sends each request to the ETL agent, and compares the file it writes with the reference: row count, expected columns and their values. See [docs/experiments-etl.md](docs/experiments-etl.md).
 
 ### Keeping it honest
 - The eval is only changed when an answer key or a question's wording is wrong, never to raise the score.
@@ -464,9 +469,13 @@ AI-Data-Agent/
 │   ├── followup_check_questions.json # Final check conversations for EXP-07 part 2
 │   ├── run_followup_eval.py # Scores follow-up conversations
 │   ├── run_eval.py          # Scores the agent and writes reports
+│   ├── etl_tasks.py         # ETL tasks with pandas reference outputs
+│   ├── run_etl_eval.py      # Scores the ETL agent's output files
+│   ├── etl_fixtures/        # Small test files and API responses for the ETL tasks
 │   └── results/             # Reports from each run
 ├── docs/
-│   ├── experiments.md       # Experiment log: changes, hypotheses, results
+│   ├── experiments.md       # Experiment log: every experiment, SQL details
+│   ├── experiments-etl.md   # ETL Analyst experiments (EXP-11 onwards)
 │   ├── troubleshooting.md   # Common errors and fixes
 │   └── demo.gif             # Demo of the chat app
 ├── data/                    # Dataset and ETL outputs
