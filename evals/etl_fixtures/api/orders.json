@@ -1,0 +1,123 @@
+{
+ "orders": [
+  {
+   "order_id": "ORD-700",
+   "customer": {
+    "id": 300,
+    "city": "Toronto"
+   },
+   "items": [
+    {
+     "sku": "SKU-412",
+     "qty": 2,
+     "unit_price": 26.05
+    },
+    {
+     "sku": "SKU-418",
+     "qty": 2,
+     "unit_price": 22.97
+    },
+    {
+     "sku": "SKU-980",
+     "qty": 1,
+     "unit_price": 17.56
+    }
+   ]
+  },
+  {
+   "order_id": "ORD-701",
+   "customer": {
+    "id": 301,
+    "city": "Toronto"
+   },
+   "items": [
+    {
+     "sku": "SKU-929",
+     "qty": 2,
+     "unit_price": 7.47
+    }
+   ]
+  },
+  {
+   "order_id": "ORD-702",
+   "customer": {
+    "id": 302,
+    "city": "Calgary"
+   },
+   "items": [
+    {
+     "sku": "SKU-928",
+     "qty": 3,
+     "unit_price": 27.96
+    },
+    {
+     "sku": "SKU-288",
+     "qty": 3,
+     "unit_price": 17.29
+    },
+    {
+     "sku": "SKU-122",
+     "qty": 1,
+     "unit_price": 12.21
+    }
+   ]
+  },
+  {
+   "order_id": "ORD-703",
+   "customer": {
+    "id": 303,
+    "city": "Calgary"
+   },
+   "items": [
+    {
+     "sku": "SKU-305",
+     "qty": 4,
+     "unit_price": 4.75
+    },
+    {
+     "sku": "SKU-106",
+     "qty": 2,
+     "unit_price": 24.42
+    },
+    {
+     "sku": "SKU-617",
+     "qty": 4,
+     "unit_price": 19.8
+    }
+   ]
+  },
+  {
+   "order_id": "ORD-704",
+   "customer": {
+    "id": 304,
+    "city": "Calgary"
+   },
+   "items": [
+    {
+     "sku": "SKU-749",
+     "qty": 4,
+     "unit_price": 25.88
+    },
+    {
+     "sku": "SKU-629",
+     "qty": 1,
+     "unit_price": 22.02
+    }
+   ]
+  },
+  {
+   "order_id": "ORD-705",
+   "customer": {
+    "id": 305,
+    "city": "Calgary"
+   },
+   "items": [
+    {
+     "sku": "SKU-258",
+     "qty": 4,
+     "unit_price": 23.2
+    }
+   ]
+  }
+ ]
+}

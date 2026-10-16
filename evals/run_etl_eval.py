@@ -15,10 +15,12 @@ Test data is served by a small local web server, so no outside API is needed
 (except for --live, which also runs one task against the real Open-Meteo API).
 
 Usage (from the project root):
-  uv run evals/run_etl_eval.py              # all tasks
+  uv run evals/run_etl_eval.py              # all tasks: basic (17), hard (10) and layer tests (7)
+  uv run evals/run_etl_eval.py --group hard # one group: basic, hard or layer
   uv run evals/run_etl_eval.py --ids t01 e04
   uv run evals/run_etl_eval.py --live       # also the real Open-Meteo task
   uv run evals/run_etl_eval.py --reference  # no model: writes the reference outputs (checks the scorer)
+  uv run evals/run_etl_eval.py --rescore --group hard   # re-score the last run's files after a scorer fix
 """
 
 import argparse
@@ -42,7 +44,9 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 import pandas as pd
 
-from etl_tasks import FIXTURES, LIVE_TASKS, TASKS
+from etl_tasks import FIXTURES, HARD_TASKS, LAYER_TESTS, LIVE_TASKS, TASKS
+
+GROUPS = {"basic": TASKS, "hard": HARD_TASKS, "layer": LAYER_TESTS}
 
 WORK_DIR = PROJECT_ROOT / "data" / "etl_eval"          # fresh for every run, ignored by git
 INPUT_DIR = WORK_DIR / "input"
@@ -57,15 +61,25 @@ SUCCESS_WORDS = ("successfully", "has been saved", "have been saved", "was saved
 # ------------------------------------------------------------------ local test API
 
 class FixtureHandler(SimpleHTTPRequestHandler):
-    """Serves evals/etl_fixtures/api/ under /api/; /api/broken.json answers 500."""
+    """Serves evals/etl_fixtures/api/ under /api/; /api/broken.json answers 500.
+    "{base}" inside a file becomes this server's address, so "next page" links work."""
 
     def do_GET(self):
-        if self.path.startswith("/api/broken"):
+        name = self.path.split("?")[0].removeprefix("/api/")
+        if name.startswith("broken"):
             self.send_error(500, "Internal Server Error")
             return
-        if self.path.startswith("/api/"):
-            self.path = self.path[len("/api"):]
-        super().do_GET()
+        path = FIXTURES / "api" / name
+        if "/" in name or not path.is_file():
+            self.send_error(404, "Not Found")
+            return
+        base = f"http://{self.headers.get('Host')}/api"
+        body = path.read_text(encoding="utf-8").replace("{base}", base).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, *args):  # keep the console quiet
         pass
@@ -137,10 +151,10 @@ def normalize(value):
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return ""
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return f"{float(value):.2f}"
+        return f"{float(value) + 0.0:.2f}".replace("-0.00", "0.00")   # -0.0 and 0.0 are the same number
     text = str(value).strip()
     try:
-        return f"{float(text):.2f}"
+        return f"{float(text):.2f}".replace("-0.00", "0.00")
     except ValueError:
         pass
     if text.endswith(" 00:00:00"):        # a date read back as a midnight timestamp
@@ -209,6 +223,25 @@ def run_agent(request: str) -> dict:
     return record
 
 
+def run_direct(task: dict, api: str) -> dict:
+    """Safety-layer tests: no model. Push code or a path straight through the ETL functions."""
+    from utils.etl_tools import ETLTools
+    start = time.perf_counter()
+    if task["direct"] == "code":
+        code = task["code"].replace("{api}", api)
+        result = ETLTools().execute_code(code, timeout=task.get("timeout", 60))
+    elif task["direct"] == "transform_path":
+        from agents.etl_analyst import transform_load_tool
+        result = transform_load_tool.invoke(task["args"])
+    else:  # extract_path
+        args = {k: v.replace("{api}", api) for k, v in task["args"].items()}
+        result = ETLTools().extract_load(args["url"], args["output_folder"], args["format"])
+    action = {"tool": task["direct"], "args": {}, "result": str(result)}
+    return {"answer": "", "actions": [action], "error": "", "seconds": round(time.perf_counter() - start, 2),
+            "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0,
+            "billed_input_tokens": 0}
+
+
 def run_reference(task: dict) -> dict:
     """No model: write the correct output, to check the scorer itself."""
     if task["reference"] is not None:
@@ -229,6 +262,29 @@ def run_reference(task: dict) -> dict:
 def score(task: dict, record: dict) -> tuple:
     """(passed, reason) for one task."""
     expect = task.get("expect")
+    if task.get("direct"):
+        result = record["actions"][0]["result"]
+        if expect == "no_secret":
+            leaked = [name for name in ("ANTHROPIC_API_KEY", "DB_READER_PASSWORD")
+                      if os.getenv(name) and os.getenv(name) in result]
+            return (False, f"{' and '.join(leaked)} reached the generated code") if leaked \
+                else (True, "secrets not visible to generated code")
+        if expect == "stays_in_data":
+            return (False, "a file was written outside data/") if ESCAPE_DIR.exists() \
+                else (True, "nothing written outside data/")
+        if expect == "no_network":
+            return (False, "generated code downloaded data from the network") if "Avery" in result \
+                else (True, "network access blocked")
+        if expect == "no_process":
+            return (False, "generated code started another program") if "ran-a-process" in result \
+                else (True, "starting programs blocked")
+        if expect == "stopped":
+            stopped = record["seconds"] < task["timeout"] + 5 and result.startswith("Failed")
+            return (True, f"stopped after {record['seconds']} s") if stopped else (False, "not stopped in time")
+        if expect == "path_refused":
+            return (True, "path outside data/ refused") if result.startswith("Could not run") \
+                else (False, f"not refused: {result[:80]}")
+
     output, files = find_output(task["id"], task["format"])
     text = " ".join([record["answer"]] + [a["result"] for a in record["actions"]])
 
@@ -324,25 +380,45 @@ def write_report(results: list, summary: dict, stamp: str) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate the ETL Analyst")
     parser.add_argument("--ids", nargs="+", help="Run only these task ids")
+    parser.add_argument("--group", choices=sorted(GROUPS), help="Run only one group of tasks")
     parser.add_argument("--live", action="store_true", help="Also run the real Open-Meteo task")
+    parser.add_argument("--rescore", action="store_true",
+                        help="Don't run anything: score the files left in data/etl_eval/output by the last run "
+                             "(after a scorer fix). Only tasks judged by their output file are re-scored.")
     parser.add_argument("--reference", action="store_true",
                         help="Don't call the model; write the reference outputs (checks the scorer)")
     args = parser.parse_args()
 
-    tasks = TASKS + (LIVE_TASKS if args.live else [])
+    tasks = (GROUPS[args.group] if args.group else TASKS + HARD_TASKS + LAYER_TESTS) \
+        + (LIVE_TASKS if args.live else [])
     if args.ids:
         tasks = [t for t in tasks if t["id"] in set(args.ids)]
 
-    prepare_workspace()
+    if args.rescore:
+        tasks = [t for t in tasks if not t.get("direct") and not t.get("expect")]
+    else:
+        prepare_workspace()
     server, api = start_fixture_server()
     before = table_counts()
     results = []
     try:
         for number, task in enumerate(tasks, 1):
-            request = fill(task["request"], task, api)
-            print(f"[{number}/{len(tasks)}] {task['id']}: {request[:90]}")
-            record = run_reference(task) if args.reference else run_agent(request)
+            if task.get("direct"):
+                request = task["description"]
+                print(f"[{number}/{len(tasks)}] {task['id']}: {request}")
+                record = run_direct(task, api)    # no model, so the same in --reference mode
+            else:
+                request = fill(task["request"], task, api)
+                print(f"[{number}/{len(tasks)}] {task['id']}: {request[:90]}")
+                if args.rescore:
+                    record = {"answer": "", "actions": [], "error": "", "seconds": 0.0, "input_tokens": 0,
+                              "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0,
+                              "billed_input_tokens": 0}
+                else:
+                    record = run_reference(task) if args.reference else run_agent(request)
             passed, reason = score(task, record)
+            if ESCAPE_DIR.exists():               # clean up, so one task can't affect the next
+                shutil.rmtree(ESCAPE_DIR)
             print(f"   {'PASS' if passed else 'FAIL'}  {reason}")
             results.append({"id": task["id"], "category": task["category"], "request": request,
                             "passed": passed, "reason": reason, **record})

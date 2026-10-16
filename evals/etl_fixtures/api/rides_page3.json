@@ -1,0 +1,26 @@
+{
+ "page": 3,
+ "total_pages": 3,
+ "total_results": 23,
+ "next": null,
+ "results": [
+  {
+   "ride_id": 5020,
+   "city": "Ottawa",
+   "fare": 11.92,
+   "status": "completed"
+  },
+  {
+   "ride_id": 5021,
+   "city": "Montreal",
+   "fare": 53.93,
+   "status": "cancelled"
+  },
+  {
+   "ride_id": 5022,
+   "city": "Montreal",
+   "fare": 50.34,
+   "status": "completed"
+  }
+ ]
+}
