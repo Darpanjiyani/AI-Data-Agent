@@ -8,7 +8,7 @@ The ETL experiments, numbered on from the SQL ones (EXP-01 to EXP-10 are in [exp
 |---|---|---|:---:|
 | [EXP-11](#exp-11--etl-evaluation-and-baseline) | 2026-10-15 | ETL evaluation and baseline (no agent change) | **18/18** (17 tasks + live), 1 run |
 | [EXP-11 part 2](#exp-11-part-2--harder-tasks-and-safety-layer-tests) | 2026-10-15 | 10 harder pipeline tasks and 7 safety-layer tests (no agent change) | pipeline **10/10**¹, safety layers **4/7** |
-| [EXP-12 part 1](#exp-12-part-1--code-guard-for-generated-pandas-code) | 2026-10-15 | Code guard for generated pandas code | first run broke pandas on Windows (transform 0/9); fixed, safety layers **10/10** on Linux, Windows re-run *pending* |
+| [EXP-12 part 1](#exp-12-part-1--code-guard-for-generated-pandas-code) | 2026-10-15 | Code guard for generated pandas code | safety layers **10/10** (was 4/9); model tasks **26/27**: the guard costs no accuracy, h03 claimed success after reading 1 of 3 pages |
 
 ¹ 9/10 as first scored; the one miss was a scorer bug (−0.0 vs 0.0), fixed and re-scored.
 
@@ -192,6 +192,19 @@ These are fixes to the guard and to the scoring of its own tests, not to the 27 
 
 **Lesson:** test a safety layer on the platform it runs on, and always pair "the bad thing is blocked" tests with a "the normal thing still works" control. A guard that blocks everything passes every blocking test.
 
-**Results with the model**
+**Results with the model** (2026-10-21, Windows: the layer tests twice, then one full run)
 
-*Pending: first `uv run evals/run_etl_eval.py --group layer` on Windows (no model, free), then the full run.*
+| Category | EXP-11 (no guard) | First run with the guard | After the fix |
+|---|:---:|:---:|:---:|
+| Extract | 5/5 | 4/5 | **5/5** |
+| Transform | 9/9 | 0/9 | **9/9** |
+| Safety (model refusals) | 3/3 | 3/3 | **3/3** |
+| Pipeline | 10/10 | 0/10 | **9/10** |
+| Safety layers | 4/9 | 9/9 (partly for the wrong reason) | **10/10**, in both runs |
+
+**Findings**
+1. **The guard costs no accuracy.** Every extract and transform task passes again, and the one miss (h03) never ran any generated code: it used only the extract tool.
+2. **The safety layers now hold on the platform they run on,** for the right reasons: the control test g10 passes (normal pandas code runs) and the endless loop really runs until the 3-second limit.
+3. **The miss is a new kind of failure: a false claim of success.** In h03 (a paginated API with 3 pages and 23 rides), the agent called the extract tool once, which read only the first page (10 rows), and then answered: "All ride records from the paginated API have been extracted". The tool's own message said 10 rows. In EXP-11 the same task passed with 7 tool calls, so whether the agent works around the tool's missing pagination changes from run to run. A pipeline that silently drops 13 of 23 records and reports success is worse than one that fails loudly.
+
+**Next (EXP-12 part 2):** pagination belongs in the tool, not in the model's judgement. The extract tool will follow "next" links itself and report how many pages and rows it read; it will also turn column-of-values responses (Open-Meteo) into one row per day, handle a list of locations, and name each file after its source instead of `extracted_data`.
