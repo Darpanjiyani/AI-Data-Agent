@@ -261,7 +261,7 @@ print(reply.standalone_question)  # how the follow-up was understood
 - "How many cancelled rides were there for each cancellation reason?"
 - "What is the total revenue from completed payments by payment method?"
 - "Extract the data from https://pokeapi.co/api/v2/pokemon and save it to data/extract as CSV."
-- "Read data/extract/extracted_data.csv, keep only names starting with 'c', and save it to data/transform as CSV."
+- "Read data/extract/pokemon.csv, keep only names starting with 'c', and save it to data/transform as CSV." (The extract tool names each file after its source and follows the API's "next" links, up to 50 pages.)
 
 Something not working? See [docs/troubleshooting.md](docs/troubleshooting.md).
 
@@ -332,8 +332,8 @@ uv run evals/run_eval.py --set holdout2      # second held-out set (see below)
 uv run evals/run_followup_eval.py            # follow-up conversations (see below)
 uv run evals/run_followup_eval.py --set fresh   # fresh follow-up conversations (EXP-07)
 uv run evals/run_followup_eval.py --set check   # final check conversations (EXP-07)
-uv run evals/run_etl_eval.py                 # ETL Analyst: 27 tasks + 10 safety-layer tests
-uv run evals/run_etl_eval.py --group hard    # one group: basic, hard or layer
+uv run evals/run_etl_eval.py                 # ETL Analyst: 27 tasks + 10 safety-layer + 5 tool tests
+uv run evals/run_etl_eval.py --group hard    # one group: basic, hard, layer or tool
 uv run evals/run_etl_eval.py --live          # ... plus one task against the real Open-Meteo API
 ```
 
@@ -348,7 +348,7 @@ In EXP-07 one held-out question (o14) showed the same weakness as a follow-up co
 `evals/followup_questions.json` holds 14 short conversations (2 or 3 turns) and 3 safety conversations. They are sent turn by turn in one chat, through the router, memory and SQL agent, and only the last turn is scored, with the same execution and judge checks. They cover changing a time period or filter, narrowing a result, using a value from an earlier answer ("the top one", "there"), a topic switch where nothing should carry over, and follow-ups that ask to change data, which must be refused. The report shows how each follow-up was understood. `evals/followup_fresh_questions.json` adds 12 more conversations and 4 safety conversations, written before the EXP-07 fixes, to measure those fixes on conversations they weren't designed around. `evals/followup_check_questions.json` (6 conversations, 3 safety) was written before the second part of EXP-07 for the same reason.
 
 ### ETL tasks
-`evals/etl_tasks.py` holds 27 tasks for the ETL Analyst (5 extract, 9 transform and 3 safety requests, plus 10 harder pipeline tasks such as pagination, joins, messy values and upserts), each with a short pandas reference that produces the correct output, and 10 safety-layer tests that push harmful code straight through the tools without the model (plus one control test that normal code still runs). The runner serves the test data from a local web server, sends each request to the ETL agent, and compares the file it writes with the reference: row count, expected columns and their values. See [docs/experiments-etl.md](docs/experiments-etl.md).
+`evals/etl_tasks.py` holds 27 tasks for the ETL Analyst (5 extract, 9 transform and 3 safety requests, plus 10 harder pipeline tasks such as pagination, joins, messy values and upserts), each with a short pandas reference that produces the correct output, and 10 safety-layer tests that push harmful code straight through the tools without the model (plus one control test that normal code still runs), and 5 tool tests that call the extract tool directly (pagination, Open-Meteo's layout, several locations, file names). The runner serves the test data from a local web server, sends each request to the ETL agent, and compares the file it writes with the reference: row count, expected columns and their values. See [docs/experiments-etl.md](docs/experiments-etl.md).
 
 ### Keeping it honest
 - The eval is only changed when an answer key or a question's wording is wrong, never to raise the score.
@@ -384,6 +384,16 @@ In EXP-07 one held-out question (o14) showed the same weakness as a follow-up co
 ² h06 still writes the wrong-shape query sometimes (2 of 6 runs in this round), but the sanity check now catches it and the rewritten query is correct; h06 passed 5/5 when run alone. See [EXP-09](docs/experiments.md#exp-09--result-sanity-check).
 
 Results by category, notes on each number, and the caveats are in [docs/experiments.md](docs/experiments.md#results-by-version); every round has its own write-up there.
+
+**ETL Analyst** (`uv run evals/run_etl_eval.py`; details in [docs/experiments-etl.md](docs/experiments-etl.md))
+
+| Version | Changes | Tasks passed (27 + live) | Safety layers | Tool tests | Pipeline tool calls / time |
+|---|---|:---:|:---:|:---:|:---:|
+| EXP-11 | Evaluation and baseline, agent unchanged | 28/28¹ | 4/9 | – | 2.4 calls, 17.1 s |
+| EXP-12 part 1 | Code guard for generated pandas code | 26/27 | **10/10** | 0/5 | – |
+| EXP-12 part 2 | Smarter extract tool: pagination, Open-Meteo layout, file names | 27/28 | **10/10** | **5/5** | h03 1 call (was failing), weather 1 call (was 3) |
+
+¹ The 18 basic and live tasks and the 10 pipeline tasks, run separately; one pipeline result was a scorer bug (−0.0 vs 0.0), fixed and re-scored.
 
 ---
 

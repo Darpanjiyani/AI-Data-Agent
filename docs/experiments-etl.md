@@ -9,6 +9,7 @@ The ETL experiments, numbered on from the SQL ones (EXP-01 to EXP-10 are in [exp
 | [EXP-11](#exp-11--etl-evaluation-and-baseline) | 2026-10-15 | ETL evaluation and baseline (no agent change) | **18/18** (17 tasks + live), 1 run |
 | [EXP-11 part 2](#exp-11-part-2--harder-tasks-and-safety-layer-tests) | 2026-10-15 | 10 harder pipeline tasks and 7 safety-layer tests (no agent change) | pipeline **10/10**¹, safety layers **4/7** |
 | [EXP-12 part 1](#exp-12-part-1--code-guard-for-generated-pandas-code) | 2026-10-15 | Code guard for generated pandas code | safety layers **10/10** (was 4/9); model tasks **26/27**: the guard costs no accuracy, h03 claimed success after reading 1 of 3 pages |
+| [EXP-12 part 2](#exp-12-part-2--a-smarter-extract-tool) | 2026-10-21 | Smarter extract tool: pagination, columns of values, several locations, file names | tool tests **5/5** (was 0/5); model tasks **27/28** incl. live, h03 fixed |
 
 ¹ 9/10 as first scored; the one miss was a scorer bug (−0.0 vs 0.0), fixed and re-scored.
 
@@ -208,3 +209,53 @@ These are fixes to the guard and to the scoring of its own tests, not to the 27 
 3. **The miss is a new kind of failure: a false claim of success.** In h03 (a paginated API with 3 pages and 23 rides), the agent called the extract tool once, which read only the first page (10 rows), and then answered: "All ride records from the paginated API have been extracted". The tool's own message said 10 rows. In EXP-11 the same task passed with 7 tool calls, so whether the agent works around the tool's missing pagination changes from run to run. A pipeline that silently drops 13 of 23 records and reports success is worse than one that fails loudly.
 
 **Next (EXP-12 part 2):** pagination belongs in the tool, not in the model's judgement. The extract tool will follow "next" links itself and report how many pages and rows it read; it will also turn column-of-values responses (Open-Meteo) into one row per day, handle a list of locations, and name each file after its source instead of `extracted_data`.
+
+---
+
+## EXP-12 part 2 – A smarter extract tool
+
+**Goal:** make the extract tool handle the API shapes the pipeline needs, so getting all the data no longer depends on the model working around the tool. In EXP-12 part 1, h03 read 1 of 3 pages and claimed it had everything; in EXP-11 the same task passed with 7 tool calls. The weather tasks needed an extra transform step every time (e04: 3 calls, 29 s).
+
+**Tool tests first** (`TOOL_TESTS` in `evals/etl_tasks.py`, no model: they call the extract tool directly), written and run against the old extractor before it changed:
+
+| ID | Test | Old extractor | New extractor |
+|---|---|:---:|:---:|
+| k01 | Paginated API: all 3 pages (23 rides) | ❌ 10 rows | ✅ 23 rows |
+| k02 | Open-Meteo layout: one row per day | ❌ 1 row of lists | ✅ 31 rows |
+| k03 | Three locations in one response: one table with coordinates | ❌ 3 rows | ✅ 21 rows |
+| k04 | Two downloads into one folder: two files | ❌ 1 file (overwritten) | ✅ 2 files |
+| k05 | A next link to another host isn't followed, and the tool says so | ❌ said nothing | ✅ |
+
+**Changes**
+
+| # | Change | File |
+|---|---|---|
+| 1 | **Pagination:** the tool follows "next" links (`next`, `next_url`, `links.next`, `paging.next`, relative or absolute), only on the same host as the first request, at most 50 pages, never the same page twice. If a later page fails, it keeps the pages it has and says so | `utils/etl_tools.py` |
+| 2 | **Columns of values:** a response whose data is a dict of equal-length lists (Open-Meteo's `daily`) becomes one row per entry, with the response's coordinates and time zone repeated on each row; a list of such responses (several locations) becomes one table | `utils/etl_tools.py` |
+| 3 | **File names from the source:** `rides_page1.csv` instead of `extracted_data.csv`; a URL with a query string gets a short hash (`archive_3f9c1a`), so two Open-Meteo requests for different cities get different files | `utils/etl_tools.py` |
+| 4 | **The tool reports what it got:** file, pages, rows, columns and notes ("a next link to another host was not followed", "stopped after 50 pages; more pages remain") | `utils/etl_tools.py` |
+| 5 | The tool's description tells Claude it handles these shapes itself, and the agent is told to report the tools' counts and never say all data was extracted unless the tool says so | `agents/etl_analyst.py` |
+
+**Offline checks**
+- Tool tests 5/5; safety-layer tests still 10/10; normal pandas code still runs under the guard.
+- Reference outputs of all 27 model tasks pass, and the scorer still rejects all 71 wrong outputs.
+- With a stand-in model that makes a single extract call, e01 to e05 still pass, and e04 (weather) and h03 (pagination) now pass in one call.
+
+**Results with the model** (2026-10-21, Windows: tool tests once, then one full run with `--live`)
+
+Overall **42/43**: extract 5/5, transform 8/9, model safety 3/3, pipeline 10/10, safety layers 10/10, tool tests 5/5, live 1/1. Averaged over all 43 (the 15 tests without a model take no tokens): 5.2 s, 4,095 input tokens and 1.2 tool calls per task.
+
+| Task | EXP-12 part 1 | EXP-12 part 2 |
+|---|---|---|
+| h03 paginated API | ❌ read 1 of 3 pages, claimed success | ✅ 1 tool call, 3.8 s |
+| e04 weather (one location) | 3 tool calls, 29.3 s | 1 tool call, 4.9 s |
+| h01 two cities combined | 6 tool calls, 32.4 s | 3 tool calls, 12.9 s |
+| h02 three locations in one response | 3 tool calls, 24.7 s | 2 tool calls, 13.6 s |
+| l01 live Open-Meteo (from EXP-11) | 2 tool calls, 14.3 s | 1 tool call, 6.9 s |
+
+**Findings**
+1. **Every target was met.** h03 passes with the tool reading all 3 pages; the weather tasks no longer need a clean-up step (e04 and the live task in one call); combining sources takes half the calls and less than half the time. h01 and h02 still use one transform, which is now the actual work (adding the city name), not repairing the extract.
+2. **The live API works the same way:** the real Open-Meteo response became 31 rows in one call.
+3. **One new miss, unrelated to the extract tool: t01** ("Remove duplicate rows ... and save the result as CSV in data/etl_eval/output/t01"). The agent first passed paths without `data/` (refused by the path check), then saved the right data as the file `data/etl_eval/output/t01.csv` instead of a file inside the folder `t01`. Its answer said exactly where it saved it, so it wasn't a false claim; it misread the folder as a file name. t01 passed in every earlier run, so this is run-to-run variance in how the request is read, not something this change caused. It's worth watching: if it repeats, the general fix is to let the transform tool take an exact output file name, instead of leaving the name to the generated code.
+
+**Next:** EXP-13, loading into Postgres: a separate `etl_writer` database user that can write only to an `external` schema, and a person approving each load before it happens.

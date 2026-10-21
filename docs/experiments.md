@@ -17,6 +17,7 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 | [EXP-11](experiments-etl.md#exp-11--etl-evaluation-and-baseline) | 2026-10-15 | ETL Analyst: evaluation and baseline (17 tasks, no agent change) | ETL **18/18** (incl. live Open-Meteo) | – | 4,016 per task |
 | [EXP-11 part 2](experiments-etl.md#exp-11-part-2--harder-tasks-and-safety-layer-tests) | 2026-10-15 | ETL: 10 harder pipeline tasks, 7 safety-layer tests | pipeline **10/10** (after a scorer fix), safety layers **4/7** | – | 14,169 per pipeline task |
 | [EXP-12 part 1](experiments-etl.md#exp-12-part-1--code-guard-for-generated-pandas-code) | 2026-10-15 | ETL: code guard for generated pandas code | safety layers **10/10** (was 4/9); ETL tasks **26/27** | – | 4,665 per task |
+| [EXP-12 part 2](experiments-etl.md#exp-12-part-2--a-smarter-extract-tool) | 2026-10-21 | ETL: smarter extract tool (pagination, columns of values, file names) | ETL **42/43** (tool 5/5, layers 10/10, tasks 27/28 incl. live) | – | 4,095 per task |
 
 ¹ 95% as first scored; the one miss was a scoring bug (date vs midnight timestamp), fixed and re-scored.
 ² The one "incorrect" verdict was a judge error; its own reasoning found every value correct.
