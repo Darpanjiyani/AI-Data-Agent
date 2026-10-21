@@ -311,6 +311,34 @@ LAYER_TESTS = [
 ]
 
 
+# ---------------------------------------------------------------- EXP-12 part 2: extract tool
+# No model: these call the extract tool directly, so they test the tool itself. Written and run
+# against the old extractor first (EXP-12 part 2 baseline), before it was changed.
+TOOL_TESTS = [
+    {"id": "k01", "category": "tool", "direct": "extract", "expect": "extract_rows",
+     "description": "Paginated API: the tool reads all 3 pages (23 rides), not just the first",
+     "calls": [{"url": "{api}/rides_page1.json", "output_folder": "data/etl_eval/output/k01", "format": "csv"}],
+     "rows": 23, "columns": ["ride_id", "fare"]},
+    {"id": "k02", "category": "tool", "direct": "extract", "expect": "extract_rows",
+     "description": "Open-Meteo layout (columns of values): one row per day, not one row of lists",
+     "calls": [{"url": "{api}/weather_toronto_jan2025.json", "output_folder": "data/etl_eval/output/k02", "format": "csv"}],
+     "rows": 31, "columns": ["time", "temperature_2m_max", "precipitation_sum"], "unique": "time"},
+    {"id": "k03", "category": "tool", "direct": "extract", "expect": "extract_rows",
+     "description": "A list of locations in one response: one table, with each row's coordinates",
+     "calls": [{"url": "{api}/weather_multi_mar2025.json", "output_folder": "data/etl_eval/output/k03", "format": "parquet"}],
+     "rows": 21, "columns": ["time", "latitude", "longitude", "precipitation_sum"]},
+    {"id": "k04", "category": "tool", "direct": "extract", "expect": "two_files",
+     "description": "Two downloads into one folder: two files, the second doesn't overwrite the first",
+     "calls": [{"url": "{api}/weather_toronto_feb2025.json", "output_folder": "data/etl_eval/output/k04", "format": "csv"},
+               {"url": "{api}/weather_montreal_feb2025.json", "output_folder": "data/etl_eval/output/k04", "format": "csv"}],
+     "rows": 28},
+    {"id": "k05", "category": "tool", "direct": "extract", "expect": "foreign_next",
+     "description": "A next link to a different host is not followed, and the tool says so",
+     "calls": [{"url": "{api}/rides_foreign_page1.json", "output_folder": "data/etl_eval/output/k05", "format": "csv"}],
+     "rows": 3},
+]
+
+
 # Optional: one task against the real Open-Meteo API (--live). The values are unknown in
 # advance, so only the shape is checked: 31 rows, the requested columns, no missing values.
 LIVE_TASKS = [

@@ -28,16 +28,23 @@ def clean_code(text: str) -> str:
 @tool
 def extract_load_tool(url:str, output_folder:str, format:str) -> str:
     """
-    This tool extracts the data from the API (url) and loads it into the
-    the desired location (output_folder).
+    This tool extracts the data from the API (url) and saves it as a table in the
+    desired location (output_folder, inside data/). It handles the common API shapes itself,
+    so no extra transform step is needed for them:
+      - paginated APIs: it follows the "next" links and reads every page (same host, up to 50 pages);
+      - "columns of values" responses such as Open-Meteo's daily/hourly data: one row per time step;
+      - a list of such responses (several locations): one table, with each location's coordinates.
+    The file is named after the source (e.g. rides_page1.csv), so several downloads into one
+    folder don't overwrite each other.
 
     Args:
         url (str): The API endpoint from which to extract data.
         output_folder (str): The folder where the extracted data will be saved.
         format (str): The format in which to save the extracted data (csv, json, parquet).
-    
+
     Returns:
-        str: A message indicating the success or failure of the operation.
+        str: The file path, the number of pages and rows read, the columns, and any notes
+        (for example pages that couldn't be read). Report these numbers as given.
 
     """
     etl_tools = ETLTools()
@@ -131,6 +138,9 @@ def llm_node(state:ETLAgentSchema):
             If the operation is performed then inform the user and end the coversation.
             You cannot change the database. If the user asks to add, change or delete database
             records, don't call a tool: reply that you can only read data and can't make changes.
+            When you report what was done, use the row and page counts the tools returned, and
+            mention any notes they gave. Never say that all the data was extracted unless the tool
+            says so.
             Here's the chat history: {messages}\n
     """
 

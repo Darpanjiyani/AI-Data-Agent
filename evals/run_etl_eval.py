@@ -16,7 +16,7 @@ Test data is served by a small local web server, so no outside API is needed
 
 Usage (from the project root):
   uv run evals/run_etl_eval.py              # all tasks: basic (17), hard (10) and layer tests (10)
-  uv run evals/run_etl_eval.py --group hard # one group: basic, hard or layer
+  uv run evals/run_etl_eval.py --group hard # one group: basic, hard, layer or tool
   uv run evals/run_etl_eval.py --ids t01 e04
   uv run evals/run_etl_eval.py --live       # also the real Open-Meteo task
   uv run evals/run_etl_eval.py --reference  # no model: writes the reference outputs (checks the scorer)
@@ -44,9 +44,9 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 import pandas as pd
 
-from etl_tasks import FIXTURES, HARD_TASKS, LAYER_TESTS, LIVE_TASKS, TASKS
+from etl_tasks import FIXTURES, HARD_TASKS, LAYER_TESTS, LIVE_TASKS, TASKS, TOOL_TESTS
 
-GROUPS = {"basic": TASKS, "hard": HARD_TASKS, "layer": LAYER_TESTS}
+GROUPS = {"basic": TASKS, "hard": HARD_TASKS, "layer": LAYER_TESTS, "tool": TOOL_TESTS}
 
 WORK_DIR = PROJECT_ROOT / "data" / "etl_eval"          # fresh for every run, ignored by git
 INPUT_DIR = WORK_DIR / "input"
@@ -233,6 +233,12 @@ def run_direct(task: dict, api: str) -> dict:
     elif task["direct"] == "transform_path":
         from agents.etl_analyst import transform_load_tool
         result = transform_load_tool.invoke(task["args"])
+    elif task["direct"] == "extract":  # tool tests: one or more direct calls to the extractor
+        results = []
+        for call in task["calls"]:
+            args = {k: v.replace("{api}", api) for k, v in call.items()}
+            results.append(ETLTools().extract_load(args["url"], args["output_folder"], args["format"]))
+        result = "\n".join(results)
     else:  # extract_path
         args = {k: v.replace("{api}", api) for k, v in task["args"].items()}
         result = ETLTools().extract_load(args["url"], args["output_folder"], args["format"])
@@ -262,6 +268,29 @@ def run_reference(task: dict) -> dict:
 def score_layer(task: dict, record: dict) -> tuple:
     """(passed, reason) for a safety-layer test, before checking it was stopped for the right reason."""
     expect, result = task.get("expect"), record["actions"][0]["result"]
+    if task["direct"] == "extract":
+        folder = PROJECT_ROOT / task["calls"][0]["output_folder"]
+        fmt = task["calls"][0]["format"]
+        files = sorted(f for f in folder.glob("*") if f.suffix.lower() in EXTENSIONS[fmt]) if folder.exists() else []
+        if expect == "two_files":
+            if len(files) != 2:
+                return False, f"{len(files)} file(s) in the folder, expected 2 (one per source)"
+            counts = [len(read_output(f, fmt)) for f in files]
+            return (True, f"two files, {counts[0]} and {counts[1]} rows") if counts == [task["rows"]] * 2 \
+                else (False, f"two files but {counts[0]} and {counts[1]} rows, expected {task['rows']} each")
+        if not files:
+            return False, f"no .{fmt} file written: {result.strip()[:110]}"
+        frame = read_output(max(files, key=lambda f: f.stat().st_mtime), fmt)
+        if len(frame) != task["rows"]:
+            return False, f"{len(frame)} rows, expected {task['rows']}"
+        missing = [c for c in task.get("columns", []) if find_column(frame, [c]) is None]
+        if missing:
+            return False, f"missing columns: {', '.join(missing)} (has: {', '.join(map(str, frame.columns))[:90]})"
+        if task.get("unique") and frame[find_column(frame, [task["unique"]])].duplicated().any():
+            return False, f"repeated values in {task['unique']}"
+        if expect == "foreign_next" and "not followed" not in result.lower():
+            return False, "3 rows, but the tool didn't say it skipped the link to another host"
+        return True, f"{len(frame)} rows" + (", link to another host not followed" if expect == "foreign_next" else "")
     if expect == "runs":
         ok = result.startswith("Code executed") and (PROJECT_ROOT / task["output"]).exists()
         return (True, "normal pandas code ran under the guard") if ok \
@@ -407,7 +436,7 @@ def main() -> None:
                         help="Don't call the model; write the reference outputs (checks the scorer)")
     args = parser.parse_args()
 
-    tasks = (GROUPS[args.group] if args.group else TASKS + HARD_TASKS + LAYER_TESTS) \
+    tasks = (GROUPS[args.group] if args.group else TASKS + HARD_TASKS + LAYER_TESTS + TOOL_TESTS) \
         + (LIVE_TASKS if args.live else [])
     if args.ids:
         tasks = [t for t in tasks if t["id"] in set(args.ids)]
