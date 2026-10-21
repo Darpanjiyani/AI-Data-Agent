@@ -276,7 +276,7 @@ The original version relied on one LLM check and ran AI-written code directly. E
 | Harmful SQL (DELETE, DROP, ...) | One LLM "judge" decided | **3 layers:** rule-based guard → LLM judge → read-only database user |
 | Requests to change data | Sometimes attempted, sometimes turned into a read query | Clear refusal: "I can only read data..." |
 | Runaway queries | No limit | 15-second statement timeout |
-| AI-generated pandas code | `exec()` inside the app | Separate process, 60-second limit, no API keys or passwords |
+| AI-generated pandas code | `exec()` inside the app | **Code guard** ([EXP-12](docs/experiments-etl.md#exp-12-part-1--code-guard-for-generated-pandas-code)): checked before running, then run in a separate process that can only write inside `data/`, can't read `.env`, use the network or start programs, with a 60-second limit |
 | File access by ETL tools | Any path | Only inside `data/` |
 | Personal data sent to the LLM | Sample rows with emails and phones | Emails and phone numbers hidden |
 | Secrets | `.env` | `.env` (git-ignored) plus `.env.example` template |
@@ -290,8 +290,12 @@ In the evaluations, none of the 7 unsafe requests (delete, update, drop, create 
 
 The guard fails closed: anything it can't parse, including a prose reply instead of SQL, is blocked.
 
-### ETL: isolation, not a full sandbox
-Generated code runs in a separate Python process, so it can't crash or freeze the app and can't read your secrets. It can still read and write files your user account can access; running it in a container is on the [roadmap](#8-roadmap).
+### ETL: a code guard, not yet a container
+The pandas code Claude writes goes through two checks (`utils/code_guard.py`):
+1. **Before running:** its syntax tree is checked. Imports outside a short list (pandas, numpy, json, re, datetime, ...) and calls like `eval`, `exec`, `os.system` or `os.environ` are rejected with a message the agent can use to rewrite the code.
+2. **While running:** the code runs in a separate, time-limited process with a Python audit hook that sees every file open, network connection and program start. It can write only inside `data/`, read only `data/` and Python's own libraries (so not `.env`), and can't use the network or start other programs. Each layer was tested on its own: the runtime check alone stops all 9 attempts to get around the static one.
+
+Until EXP-12 the code could write anywhere, use the network, start programs and read the `.env` file; the safety-layer tests in `evals/etl_tasks.py` found this without involving the model. It's a guard, not a container: running generated code in a container is still on the [roadmap](#8-roadmap).
 
 ---
 
@@ -328,7 +332,8 @@ uv run evals/run_eval.py --set holdout2      # second held-out set (see below)
 uv run evals/run_followup_eval.py            # follow-up conversations (see below)
 uv run evals/run_followup_eval.py --set fresh   # fresh follow-up conversations (EXP-07)
 uv run evals/run_followup_eval.py --set check   # final check conversations (EXP-07)
-uv run evals/run_etl_eval.py                 # ETL Analyst: 17 extract, transform and safety tasks
+uv run evals/run_etl_eval.py                 # ETL Analyst: 27 tasks + 10 safety-layer tests
+uv run evals/run_etl_eval.py --group hard    # one group: basic, hard or layer
 uv run evals/run_etl_eval.py --live          # ... plus one task against the real Open-Meteo API
 ```
 
@@ -343,7 +348,7 @@ In EXP-07 one held-out question (o14) showed the same weakness as a follow-up co
 `evals/followup_questions.json` holds 14 short conversations (2 or 3 turns) and 3 safety conversations. They are sent turn by turn in one chat, through the router, memory and SQL agent, and only the last turn is scored, with the same execution and judge checks. They cover changing a time period or filter, narrowing a result, using a value from an earlier answer ("the top one", "there"), a topic switch where nothing should carry over, and follow-ups that ask to change data, which must be refused. The report shows how each follow-up was understood. `evals/followup_fresh_questions.json` adds 12 more conversations and 4 safety conversations, written before the EXP-07 fixes, to measure those fixes on conversations they weren't designed around. `evals/followup_check_questions.json` (6 conversations, 3 safety) was written before the second part of EXP-07 for the same reason.
 
 ### ETL tasks
-`evals/etl_tasks.py` holds 17 tasks for the ETL Analyst (5 extract, 9 transform, 3 safety), each with a short pandas reference that produces the correct output. The runner serves the test data from a local web server, sends each request to the ETL agent, and compares the file it writes with the reference: row count, expected columns and their values. See [docs/experiments-etl.md](docs/experiments-etl.md).
+`evals/etl_tasks.py` holds 27 tasks for the ETL Analyst (5 extract, 9 transform and 3 safety requests, plus 10 harder pipeline tasks such as pagination, joins, messy values and upserts), each with a short pandas reference that produces the correct output, and 10 safety-layer tests that push harmful code straight through the tools without the model (plus one control test that normal code still runs). The runner serves the test data from a local web server, sends each request to the ETL agent, and compares the file it writes with the reference: row count, expected columns and their values. See [docs/experiments-etl.md](docs/experiments-etl.md).
 
 ### Keeping it honest
 - The eval is only changed when an answer key or a question's wording is wrong, never to raise the score.
@@ -388,6 +393,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - [x] Read-only database user with a query timeout
 - [x] Rule-based SQL validation before the LLM judge
 - [x] Isolated, time-limited execution for generated ETL code
+- [x] Code guard for generated ETL code: static check plus runtime limits (EXP-12)
 - [x] Personal columns hidden from the LLM
 - [ ] Run generated ETL code in a container
 - [x] Clear refusals for vague follow-up change requests ("remove those drivers")
@@ -456,6 +462,7 @@ AI-Data-Agent/
 │   ├── charts.py            # Picks a chart (metric, bar, line or none) for a result
 │   ├── usage.py             # Token usage, cache reads/writes and billed input tokens
 │   ├── result_checks.py     # Sanity check: does a successful result fit the question?
+│   ├── code_guard.py        # Checks and limits for the pandas code the ETL agent writes
 │   ├── chat_store.py        # Saved chats for the app (SQLite)
 │   ├── etl_tools.py         # API extraction, file reading, isolated code execution
 │   ├── feed_db.py           # Creates tables and loads the dataset
