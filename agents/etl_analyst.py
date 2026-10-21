@@ -87,7 +87,10 @@ def transform_load_tool(input_file_path:str,output_folder:str,output_format:str,
             Create the Pandas Dataframe from the data stored in the file : {input_posix} and then
             write the code to transform the data and save it as a single {output_format} file
             inside the folder {output_posix}. Create the folder with os.makedirs(..., exist_ok=True)
-            if it does not exist. Only read and write files inside these paths.
+            if it does not exist. Only read and write files inside the data/ folder.
+            Only import pandas, numpy and standard modules for data work (json, re, datetime,
+            math, os, pathlib, csv); don't use the network, environment variables, eval/exec or
+            other programs. Code that breaks these rules is rejected before it runs.
             Here's the user's question: {user_question}\n
             Here's the context of the data you will be analyzing: {top_3_rows}\n
 

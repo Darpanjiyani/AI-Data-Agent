@@ -7,6 +7,8 @@ from pathlib import Path
 import requests
 import pandas as pd
 
+from utils.code_guard import check_code, runtime_prelude
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 
@@ -130,14 +132,22 @@ class ETLTools:
           - it is stopped after `timeout` seconds,
           - it doesn't receive API keys or database passwords.
 
-        Note: this is isolation, not a full sandbox. The code can still read and
-        write files your user account can access. A container (Docker) is the
-        next step for full sandboxing.
+        Since EXP-12 the code guard runs first (utils/code_guard.py): code with a
+        forbidden import or call is rejected without running, and the code that does run
+        can only write inside data/, read data/ and Python's own files, and can't use the
+        network or start other programs. That's a guard, not a container; a container
+        (Docker) is still the stronger, later step.
         """
+        problems = check_code(code)
+        if problems:
+            return ("Failed: the code guard rejected the code before running it: "
+                    + "; ".join(problems) + ". Rewrite it using only pandas and the standard "
+                    "data modules, reading and writing files inside the data/ folder only.")
+
         with tempfile.NamedTemporaryFile(
             "w", suffix=".py", delete=False, encoding="utf-8"
         ) as script:
-            script.write(code)
+            script.write(runtime_prelude(DATA_DIR) + "\n# --- generated code ---\n" + code)
             script_path = script.name
 
         try:
