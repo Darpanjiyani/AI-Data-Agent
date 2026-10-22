@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -117,7 +118,10 @@ def etl_node(state: DataAgentSchema):
                     calls[message.tool_call_id]["result"] = str(message.content)
 
     answer = last_message.text if last_message is not None else ""
-    turn.update({"answer": answer, "steps": steps, "etl_actions": actions, "standalone_question": question})
+    # Loads the agent prepared: the app shows each one with Approve / Cancel buttons (EXP-13)
+    pending_loads = re.findall(r"Load ID: ([0-9a-f]{12})", " ".join(a["result"] for a in actions))
+    turn.update({"answer": answer, "steps": steps, "etl_actions": actions, "standalone_question": question,
+                 "pending_loads": list(dict.fromkeys(pending_loads))})
 
     # Add only the ETL agent's final reply to the conversation
     return {"messages": [AIMessage(content=answer)], "turn": turn}

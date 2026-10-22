@@ -16,3 +16,6 @@ chat_history/
 # ETL eval workspace and the folder the escape test checks for
 data/etl_eval/
 etl_escape_test/
+
+# Pending data loads waiting for a person to approve them (EXP-13)
+agent_state/

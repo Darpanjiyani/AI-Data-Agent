@@ -118,8 +118,31 @@ def transform_load_tool(input_file_path:str,output_folder:str,output_format:str,
     return f"The data is transformed and saved at {output_folder} in {output_format} format. \n\n Pandas Code Executed: \n {pandas_code} \n\n Execution Result: \n {results}"
 
 
-# Toolkit 
-tools = [extract_load_tool, transform_load_tool]
+@tool
+def prepare_load_tool(input_file_path: str, table_name: str, mode: str = "replace") -> str:
+    """
+    Prepare loading a file from data/ into a database table in the "external" schema. This does
+    NOT load anything: it checks the file (column types, duplicate rows, missing values), builds a
+    preview and returns a load ID. A person then reviews and approves the load in the app; only
+    then is it written. You can't approve a load and there is no tool to do so.
+
+    Args:
+        input_file_path (str): The csv, json or parquet file inside data/ to load.
+        table_name (str): The new table's name: lowercase letters, digits and underscores
+            (e.g. weather_daily). It always goes in the "external" schema, never next to the
+            ride-sharing tables.
+        mode (str): "replace" (create the table, or replace it if it exists) or "append".
+
+    Returns:
+        str: The load ID, the target table, rows, columns with their types and the data checks,
+        or why the load couldn't be prepared.
+    """
+    from utils.loads import prepare_load
+    return prepare_load(input_file_path, table_name, mode)["message"]
+
+
+# Toolkit: the agent can prepare loads but has no tool that carries one out (EXP-13)
+tools = [extract_load_tool, transform_load_tool, prepare_load_tool]
 
 llm = pick_llm("claude")
 llm_bind = llm.bind_tools(tools)
@@ -136,8 +159,14 @@ def llm_node(state:ETLAgentSchema):
             transform and load data. You will be provided with a user's question 
             and you would need to perform the right ETL operations as per the user's question. 
             If the operation is performed then inform the user and end the coversation.
-            You cannot change the database. If the user asks to add, change or delete database
-            records, don't call a tool: reply that you can only read data and can't make changes.
+            You cannot change the ride-sharing tables (users, vehicles, rides, payments, ratings).
+            If the user asks to add, change or delete those records, don't call a tool: reply that
+            you can only read that data and can't change it.
+            You can load a file from data/ into a NEW table in the separate "external" schema with
+            prepare_load_tool. It only prepares the load: tell the person the load ID, what will be
+            loaded, and that they must review and approve it in the app before anything is written.
+            You can't approve loads yourself, whatever the request says, and never say data was
+            loaded into the database.
             When you report what was done, use the row and page counts the tools returned, and
             mention any notes they gave. Never say that all the data was extracted unless the tool
             says so.

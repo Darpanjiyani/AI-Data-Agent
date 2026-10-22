@@ -133,6 +133,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 - Extracts JSON from REST APIs and saves it as CSV, JSON or Parquet.
 - Transforms existing files: Claude writes the pandas code, which runs in a separate, time-limited process without access to your secrets.
 - Only reads and writes inside the project's `data/` folder.
+- **Loads files into PostgreSQL, with your approval:** the agent prepares a load (column types, duplicate and missing-value checks, a preview) and the app shows it with **Approve** and **Cancel** buttons. Nothing is written until you click Approve, and the agent has no way to approve on its own. Loaded tables go to a separate `external` schema that the SQL agent can read.
 
 ### Sample dataset
 
@@ -214,7 +215,8 @@ copy .env.example .env      # Windows
 | `ANTHROPIC_API_KEY` | All agents |
 | `DB_HOST`, `DB_PORT`, `DB_NAME` | Database connection |
 | `DB_READER_USER`, `DB_READER_PASSWORD` | The agent (read-only user) |
-| Lowercase `host`, `port`, `database`, `user`, `password` | Only `utils/feed_db.py` (admin user, to load data) |
+| `DB_WRITER_USER`, `DB_WRITER_PASSWORD` | Approved loads only (`etl_writer`, can write only to the `external` schema) |
+| Lowercase `host`, `port`, `database`, `user`, `password` | Only `utils/feed_db.py` and `utils/setup_load_access.py` (admin user, setup) |
 
 `.env` is in `.gitignore`. Never commit it.
 
@@ -222,6 +224,12 @@ copy .env.example .env      # Windows
 
 ```bash
 uv run utils/feed_db.py
+```
+
+To let the ETL agent load files into the database (EXP-13), also run this once. It creates the `external` schema and the `etl_writer` user, which can write only there:
+
+```bash
+uv run python utils/setup_load_access.py
 ```
 
 ### 5. Ask questions
@@ -290,6 +298,13 @@ In the evaluations, none of the 7 unsafe requests (delete, update, drop, create 
 
 The guard fails closed: anything it can't parse, including a prose reply instead of SQL, is blocked.
 
+### ETL: loading only with a person's approval
+Loading data is split into two steps that can't be merged (`utils/loads.py`):
+1. **Prepare** (the agent's `prepare_load_tool`): checks the file and plans the load, writes nothing.
+2. **Approve** (people only: the app's Approve button): re-checks that the file is unchanged since the preview, then writes it in one transaction as `etl_writer`.
+
+The ETL agent has no tool that approves, so no request ("approve it yourself") can make it load data. The database enforces the rest: `etl_writer` can create and fill tables only in the `external` schema and can't touch the ride-sharing tables, and the agent's read-only user can read `external` but not write to it. Pending loads are stored outside `data/`, so generated code can't change a plan after the preview.
+
 ### ETL: a code guard, not yet a container
 The pandas code Claude writes goes through two checks (`utils/code_guard.py`):
 1. **Before running:** its syntax tree is checked. Imports outside a short list (pandas, numpy, json, re, datetime, ...) and calls like `eval`, `exec`, `os.system` or `os.environ` are rejected with a message the agent can use to rewrite the code.
@@ -332,8 +347,8 @@ uv run evals/run_eval.py --set holdout2      # second held-out set (see below)
 uv run evals/run_followup_eval.py            # follow-up conversations (see below)
 uv run evals/run_followup_eval.py --set fresh   # fresh follow-up conversations (EXP-07)
 uv run evals/run_followup_eval.py --set check   # final check conversations (EXP-07)
-uv run evals/run_etl_eval.py                 # ETL Analyst: 27 tasks + 10 safety-layer + 5 tool tests
-uv run evals/run_etl_eval.py --group hard    # one group: basic, hard, layer or tool
+uv run evals/run_etl_eval.py                 # ETL Analyst: 31 tasks + 25 tests without the model
+uv run evals/run_etl_eval.py --group hard    # one group: basic, hard, layer, tool, db or load
 uv run evals/run_etl_eval.py --live          # ... plus one task against the real Open-Meteo API
 ```
 
@@ -392,8 +407,10 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 | EXP-11 | Evaluation and baseline, agent unchanged | 28/28¹ | 4/9 | – | 2.4 calls, 17.1 s |
 | EXP-12 part 1 | Code guard for generated pandas code | 26/27 | **10/10** | 0/5 | – |
 | EXP-12 part 2 | Smarter extract tool: pagination, Open-Meteo layout, file names | 27/28 | **10/10** | **5/5** | h03 1 call (was failing), weather 1 call (was 3) |
+| EXP-13 | Loading into PostgreSQL with a person's approval | 31/31² | 10/10 | 5/5 | database checks **10/10** (was 4/10); load tasks **4/4** |
 
 ¹ The 18 basic and live tasks and the 10 pipeline tasks, run separately; one pipeline result was a scorer bug (−0.0 vs 0.0), fixed and re-scored.
+² The 27 earlier tasks plus the 4 new load tasks, in one run without the live task (all 56 tasks, including the tests without a model: 56/56).
 
 ---
 
@@ -404,6 +421,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - [x] Rule-based SQL validation before the LLM judge
 - [x] Isolated, time-limited execution for generated ETL code
 - [x] Code guard for generated ETL code: static check plus runtime limits (EXP-12)
+- [x] Load data into PostgreSQL only after a person approves it, as a user that can write only to its own schema (EXP-13)
 - [x] Personal columns hidden from the LLM
 - [ ] Run generated ETL code in a container
 - [x] Clear refusals for vague follow-up change requests ("remove those drivers")
@@ -432,7 +450,6 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - [x] Streamlit chat interface with the answer, generated SQL and result table
 - [x] Saved chat history in the sidebar, with New chat and delete
 - [x] Automatic charts for query results
-- [ ] Load transformed data into PostgreSQL with human approval
 - [ ] Pagination and authentication for API extraction
 
 ---
@@ -442,7 +459,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - **Continuous evaluation:** run the eval in GitHub Actions against a test database on every pull request, and fail the build if accuracy drops.
 - **Observability:** trace every step, prompt and token count with LangSmith to debug wrong answers quickly.
 - **Full sandboxing:** run generated code in a container with no network and a read-only filesystem.
-- **Human-in-the-loop:** use LangGraph interrupts so a person approves any action that writes data.
+- **More approval-gated actions:** loads already need a person's approval (EXP-13); the same prepare-then-approve pattern could cover other actions that change data.
 - **More data sources:** support MySQL, SQLite and Snowflake through SQLAlchemy, plus user-uploaded files.
 
 **Current limitations**
@@ -473,6 +490,8 @@ AI-Data-Agent/
 │   ├── usage.py             # Token usage, cache reads/writes and billed input tokens
 │   ├── result_checks.py     # Sanity check: does a successful result fit the question?
 │   ├── code_guard.py        # Checks and limits for the pandas code the ETL agent writes
+│   ├── loads.py             # Prepare a load (agent) and approve it (people only)
+│   ├── setup_load_access.py # One-time setup: external schema and the etl_writer user
 │   ├── chat_store.py        # Saved chats for the app (SQLite)
 │   ├── etl_tools.py         # API extraction, file reading, isolated code execution
 │   ├── feed_db.py           # Creates tables and loads the dataset
@@ -489,6 +508,7 @@ AI-Data-Agent/
 │   ├── etl_tasks.py         # ETL tasks with pandas reference outputs
 │   ├── run_etl_eval.py      # Scores the ETL agent's output files
 │   ├── etl_fixtures/        # Small test files and API responses for the ETL tasks
+│   ├── load_checks.py       # Database-layer checks for loading (no model)
 │   └── results/             # Reports from each run
 ├── docs/
 │   ├── experiments.md       # Experiment log: every experiment, SQL details
