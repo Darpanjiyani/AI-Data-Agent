@@ -4,7 +4,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.llm_pick import pick_llm
-from utils.etl_tools import ETLTools, resolve_data_path
+from utils.etl_tools import ETLTools, describe_written_files, folder_snapshot, resolve_data_path
 from Models.schema import ETLAgentSchema
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
@@ -34,6 +34,9 @@ def extract_load_tool(url:str, output_folder:str, format:str) -> str:
       - paginated APIs: it follows the "next" links and reads every page (same host, up to 50 pages);
       - "columns of values" responses such as Open-Meteo's daily/hourly data: one row per time step;
       - a list of such responses (several locations): one table, with each location's coordinates.
+        When the URL lists the points (latitude=..&longitude=..), each row also gets
+        requested_latitude/requested_longitude: the point it answers, exactly as in the URL.
+        Weather APIs answer with their grid cell's coordinates (latitude/longitude), a few km away.
     The file is named after the source (e.g. rides_page1.csv), so several downloads into one
     folder don't overwrite each other.
 
@@ -110,12 +113,19 @@ def transform_load_tool(input_file_path:str,output_folder:str,output_format:str,
     pandas_code = clean_code(response)
 
     # Execute the Pandas code in a separate process with a time limit
+    before = folder_snapshot(output_path)
     results = etl_tools.execute_code(pandas_code)
 
     if results.startswith("Failed"):
         return f"The transformation failed. \n\n Pandas Code: \n {pandas_code} \n\n Error: \n {results}"
 
-    return f"The data is transformed and saved at {output_folder} in {output_format} format. \n\n Pandas Code Executed: \n {pandas_code} \n\n Execution Result: \n {results}"
+    # Report the files that were really written (path, rows, columns), not what the code meant to do
+    written = describe_written_files(output_path, before)
+    if not written:
+        return (f"The code ran, but no file was written in {output_folder}. \n\n Pandas Code Executed: \n "
+                f"{pandas_code} \n\n Execution Result: \n {results}")
+    return (f"The transformation wrote: " + "; ".join(written) + f" \n\n Pandas Code Executed: \n {pandas_code}"
+            f" \n\n Execution Result: \n {results}")
 
 
 @tool
@@ -170,6 +180,9 @@ def llm_node(state:ETLAgentSchema):
             When you report what was done, use the row and page counts the tools returned, and
             mention any notes they gave. Never say that all the data was extracted unless the tool
             says so.
+            Save files exactly where the person asked. A path without a file extension (for
+            example data/out/report) is a folder: pass the whole path as output_folder, and don't
+            turn its last part into a file name. Report the file paths the tools say they wrote.
             Here's the chat history: {messages}\n
     """
 

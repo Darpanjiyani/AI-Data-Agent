@@ -19,6 +19,7 @@ Usage (from the project root):
   uv run evals/run_eval.py --limit 5          # first 5 questions of each type
   uv run evals/run_eval.py --set holdout      # held-out questions (generalisation check)
   uv run evals/run_eval.py --set holdout2     # second held-out set, written 2026-10-14
+  uv run evals/run_eval.py --set weather      # weather + rides questions (needs external.weather_daily)
   uv run evals/run_eval.py --ids s01 j07      # specific questions
   uv run evals/run_eval.py --category join    # one category
   uv run evals/run_eval.py --no-judge         # skip the LLM judge (cheaper)
@@ -57,16 +58,21 @@ QUESTION_SETS = {
     "holdout": PROJECT_ROOT / "evals" / "holdout_questions.json",
     # Second held-out set, written after the first one had informed a fix (EXP-07). Same rule.
     "holdout2": PROJECT_ROOT / "evals" / "holdout2_questions.json",
+    # Weather + rides questions (EXP-14), written before the SQL agent could see the weather table.
+    "weather": PROJECT_ROOT / "evals" / "weather_questions.json",
 }
 RESULTS_DIR = PROJECT_ROOT / "evals" / "results"
-TABLES_TO_WATCH = ["users", "vehicles", "rides", "payments", "ratings"]
+TABLES_TO_WATCH = ["users", "vehicles", "rides", "payments", "ratings",
+                   "external.weather_daily"]   # EXP-14: loaded weather (if it exists yet)
 
 
 # --------------------------------------------------------------------------- #
 #  Comparing query results                                                     #
 # --------------------------------------------------------------------------- #
 
-MIDNIGHT_TIMESTAMP = re.compile(r"^(\d{4}-\d{2}-\d{2})[ T]00:00:00(\.0+)?$")
+# Midnight, with or without a time zone ("2025-02-01 00:00:00-08:00": PostgreSQL's date_trunc
+# on a date returns a timestamp with time zone, at midnight in the session's zone; EXP-14)
+MIDNIGHT_TIMESTAMP = re.compile(r"^(\d{4}-\d{2}-\d{2})[ T]00:00:00(\.0+)?(Z|[+-]\d{2}(:?\d{2})?)?$")
 
 
 def normalize_value(value):
@@ -246,6 +252,11 @@ def run_sql_agent(sql_analyst, question: str) -> dict:
 def table_counts(db) -> dict:
     counts = {}
     for table in TABLES_TO_WATCH:
+        if "." in table:   # a loaded table (EXP-14) may not exist yet: that's "absent", not an error
+            exists = parse_result(db.execute_query(f"SELECT to_regclass('{table}') IS NOT NULL AS found"))
+            if exists and str(exists[0][0]).lower() in ("false", "0"):
+                counts[table] = "absent"
+                continue
         rows = parse_result(db.execute_query(f"SELECT COUNT(*) FROM {table}"))
         counts[table] = int(rows[0][0]) if rows else "error"
     return counts
@@ -262,7 +273,7 @@ def pct(part, whole):
 def main():
     parser = argparse.ArgumentParser(description="Evaluate the AI Data Agent.")
     parser.add_argument("--set", choices=sorted(QUESTION_SETS), default="main",
-                        help="Which question set to run: main (default), holdout or holdout2.")
+                        help="Which question set to run: main (default), holdout, holdout2 or weather.")
     parser.add_argument("--limit", type=int, help="Only run the first N questions of each type.")
     parser.add_argument("--ids", nargs="+", help="Only run these question ids.")
     parser.add_argument("--category", help="Only run questions in this category (simple, aggregation, join, date, tricky, safety, routing).")

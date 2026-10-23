@@ -11,6 +11,8 @@ The ETL experiments, numbered on from the SQL ones (EXP-01 to EXP-10 are in [exp
 | [EXP-12 part 1](#exp-12-part-1--code-guard-for-generated-pandas-code) | 2026-10-15 | Code guard for generated pandas code | safety layers **10/10** (was 4/9); model tasks **26/27**: the guard costs no accuracy, h03 claimed success after reading 1 of 3 pages |
 | [EXP-12 part 2](#exp-12-part-2--a-smarter-extract-tool) | 2026-10-21 | Smarter extract tool: pagination, columns of values, several locations, file names | tool tests **5/5** (was 0/5); model tasks **27/28** incl. live, h03 fixed |
 | [EXP-13](#exp-13--loading-into-postgresql-with-a-persons-approval) | 2026-10-21 | Loading into PostgreSQL with a person's approval | database checks **10/10** (was 4/10); load tasks **4/4**; full run **56/56** |
+| [EXP-14 part 1](#exp-14-part-1--weather-for-the-8-cities) | 2026-10-23 | Weather for the 8 cities: each location tied to the point it was asked for; output compared row by row; tools report the files really written | tool tests **6/6** (was 5/6); full run **60/61** incl. live; real load approved (4,608 rows) |
+| [EXP-14 part 2](#exp-14-part-2--the-sql-agent-reads-loaded-tables) | 2026-10-23 | The SQL agent reads loaded tables in the external schema | weather questions **11/12** (was 0/12); main set 47/47 |
 
 ¹ 9/10 as first scored; the one miss was a scorer bug (−0.0 vs 0.0), fixed and re-scored.
 
@@ -323,3 +325,102 @@ The agent has no tool that approves, so no request can make it load data by itse
 - The full run was without `--live`, so the live Open-Meteo task (l01) wasn't re-run.
 - Open: the SQL side's routing check (8 routing questions, 4 safety questions), because the router's description of the ETL agent changed. Main question s01 passed after the change.
 
+---
+
+## EXP-14 part 1 – Weather for the 8 cities
+
+**Goal:** the first real pipeline. Daily historical weather for the 8 cities in the ride data goes into `external.weather_daily`, so the SQL agent can later answer questions that join weather with rides (part 2).
+
+**What the data needed first.** Two facts about the ride data shaped the design:
+- `rides` has no city column. A ride's city can only come from its rider's or driver's home city (`users.city`), and those differ for 87% of rides. The existing questions already say which ("riders from each city"), so the weather questions use the **rider's city** and the ride's date, and say so.
+- The ride data is synthetic, so weather has no real effect on it. Accuracy can still be measured; the answers just won't show real weather effects.
+
+**The problem: which city is which?** One Open-Meteo request can ask for all 8 cities, and the answer is a list of 8 locations in the order they were asked for. But each location comes back with the coordinates of the weather grid cell the API used, a few km from the requested point, not the requested point itself. The EXP-12 test response (h02) had used the requested coordinates exactly, so this case had never been tested. On a realistic response (`weather_8cities_jan2025.json`), matching the returned coordinates to the cities gives:
+
+| Matching rule | Cities matched correctly |
+|---|:---:|
+| Exact coordinates | 0/8 |
+| Rounded to 0.1° | 2/8 (Montreal and Ottawa both round to 45.5) |
+| Rounded to 1° | 6/8 |
+| Nearest point | 8/8 |
+
+Nearest point works here, but only if the agent thinks of it, and it can fail for cities close together. The request itself always knows the order, so the fix belongs in the tool, not in the model's judgement.
+
+**Tests first** (written and run before any change):
+- **Tool test k06:** extract the 8-city response; every row must say which requested point it belongs to, in the URL's order, and the API's timing field must be gone. Baseline: **fail** (5/6 tool tests).
+- **w01:** the pipeline as a person would ask for it: the URL, which coordinates are which city, and exactly 7 columns (`city`, `date`, `temp_max_c`, `temp_min_c`, `precipitation_mm`, `snowfall_cm`, `wind_max_kmh`). The column names are fixed because the SQL questions are written against them.
+- **w02:** the same, then a prepared load of 112 rows with `date` as a DATE and exactly the 8 city names, none missing.
+- **l02 (live, `--live`):** the real request for every day of the ride data, 2025-01-01 to 2026-07-30: 4,608 rows, 576 per city.
+- **12 SQL questions about weather** (`evals/weather_questions.json`), written now, before the SQL agent can see the table: 6 about weather alone, 6 joining weather with rides, plus 2 change requests and 3 routing checks. Each reference query was checked as the read-only user on a stand-in weather table.
+
+**A scorer gap found on the way.** The ETL scorer compared each column on its own. A table with every value right but on the wrong rows, such as Montreal's weather under Ottawa's name, passed. It now compares whole rows too. On 100 deliberately wrong outputs, the old scorer missed 25 (24 mixed-up rows, 1 Montreal/Ottawa swap); the new one rejects all 100. Correct outputs still pass in reference mode, 59/59.
+
+**Changes**
+
+| # | Change | File |
+|---|---|---|
+| 1 | When the URL lists the points (`latitude=..&longitude=..`), each row gets `requested_latitude` and `requested_longitude`, and the tool's note says to match locations on them. The API's `generationtime_ms` is dropped, because it describes the request, not the weather. | `utils/etl_tools.py` |
+| 2 | The extract tool's description mentions the requested-point columns | `agents/etl_analyst.py` |
+| 3 | Whole-row comparison; checks for requested points (k06), city names in a load (w02) and a full live year (l02); a `weather` group | `evals/run_etl_eval.py`, `evals/etl_tasks.py` |
+| 4 | The `weather` question set; the eval also watches `external.weather_daily` for changes | `evals/weather_questions.json`, `evals/run_eval.py` |
+
+**Offline checks:** tool tests 6/6, safety layers 10/10, reference mode 59/59, scorer 100/100. The SQL eval runs the weather set end to end with a stand-in model (12/12, change requests 2/2 not executed, routing 3/3), and the main set still passes (47/47).
+
+**Results with the model** (2026-10-23, Windows)
+
+| Run | Result |
+|---|---|
+| Tool tests (no model) | **6/6** (baseline 5/6) |
+| Weather tasks + live (`--group weather --live`) | **2/4**: w02 and l01 passed; w01 and l02 failed |
+| The real load in the app | approved: 4,608 rows, 8 cities, `date` stored as a date |
+| SQL baseline (`--set weather`), before the SQL agent can see the table | **0/12**; change requests 2/2 refused, routing 3/3 |
+
+- **City matching is fixed.** In all three weather runs (w01, w02, l02) the agent matched cities on `requested_latitude`/`requested_longitude`, as the tool's note says. w02 prepared 112 rows with exactly the 8 city names.
+- **Both failures saved the file one folder up.** w01 wrote `data/etl_eval/output/w01.csv` (it read the folder `w01` as a file name), and l02 wrote `data/etl_eval/output/archive_8ac166_transformed.csv`. The content was right: re-running the agent's own pandas code on the same test response gives exactly the reference table, for both. This is the third time (t01 in EXP-12 part 2 was the first), so it gets a fix below. The scorer and the tasks stay as they are.
+- **What the SQL baseline shows.** 11 of 12 times the SQL step replied with a sentence ("This database does not contain any weather data") instead of SQL, which the guard then blocked as invalid SQL. That's safe, but the person sees a guard error instead of a clear reason. Once (wq08) it was worse: it dropped the "snowy days" condition and answered a different question (9.86% of all Calgary rides cancelled instead of 7.79% on snowy days). A question the data can't answer should get a clear "the data doesn't have that". That's a candidate for a later experiment, with its own questions written first.
+- A bug of mine: ETL reports run before the weather table existed said "Database unchanged: unknown". The eval watched `external.weather_daily`, and a table that didn't exist yet counted as an error. A missing table now counts as "absent".
+
+**Fix for the save location**
+
+| # | Change | File |
+|---|---|---|
+| 1 | One rule in the agent's instructions: save exactly where the person asked; a path without a file extension is a folder, so pass the whole path and don't turn its last part into a file name | `agents/etl_analyst.py` |
+| 2 | The transform tool reports the files the code really wrote (path, rows, columns), found by comparing the folder before and after. If nothing was written there, it says so instead of reporting success. | `agents/etl_analyst.py`, `utils/etl_tools.py` |
+
+**Result** (2026-10-23, full run with `--live`): **60/61**. Every earlier task still passes, l02 now passes (4,608 rows, 576 per city), and so does w02. **w01 failed again the same way**: the agent passed `data/etl_eval/output` and named the file `w01.csv`. The rule alone didn't change that for this one request (2 of 2 runs). What did change: the tool reported `data/etl_eval/output/w01.csv: 112 rows`, and the agent's answer gave that real path. Before the fix, it was a guess. The rule stays because it costs nothing and is right; w01 stays open and the task isn't changed. Averaged over all 61 tasks (the 26 tests without a model take no tokens): 5.7 s, 5,177 input tokens, 1.1 tool calls.
+
+---
+
+## EXP-14 part 2 – The SQL agent reads loaded tables
+
+**Goal:** answer the 12 weather questions (baseline 0/12) without changing anything for the ride-sharing questions.
+
+**Changes**
+
+| # | Change | File |
+|---|---|---|
+| 1 | The schema the SQL agent sees now also describes every table in the `external` schema, written as `external.<table>`, with its columns, the values of short text columns (the 8 city names) and sample rows. It's a general rule, not a weather rule: any table a person approves becomes visible. | `agents/sql_analyst.py`, `utils/database.py`, `utils/schema_notes.py` |
+| 2 | The schema is built once per process and cached, so after the app approves a load it rebuilds it; a new table can be asked about straight away | `agents/service.py` |
+| 3 | `utils/drop_loaded_table.py`: a person can remove a loaded table (with a confirmation), as the writer user, which can't reach the ride-sharing tables. The agents have no tool for it. | `utils/loads.py`, `utils/drop_loaded_table.py` |
+
+No question-specific notes were added. The weather questions name the rider's city themselves, and the schema shows that `users.city` and the weather table use the same 8 names.
+
+**Offline checks:** with a stand-in weather table loaded through prepare and approve, the context gains the table (about 250 tokens); a table approved through the app appears without a restart; main set 47/47 and weather set 12/12 with the stand-in model; ETL reference mode 59/59, scorer 100/100, safety layers 10/10, tool tests 6/6.
+
+**Results with the model**
+
+(2026-10-23, Windows, on the real Open-Meteo data loaded in part 1)
+
+| Set | Before (part 1) | After |
+|---|:---:|:---:|
+| Weather questions, execution | 0/12 | **11/12** (10/12 as first scored, see wq06) |
+| Weather questions, answer (LLM judge) | 0/12 | **11/12** |
+| Change requests not executed / clearly refused | 2/2 / 2/2 | 2/2 / 2/2 |
+| Routing | 3/3 | 3/3 |
+| Main set (regression check) | 47/47 | **47/47** (h06 needed 1 retry and recovered) |
+
+- **wq06 was a scorer bug.** The agent answered February 2025, which is correct and the judge agreed, using `DATE_TRUNC('month', date)`. On a date, PostgreSQL returns a timestamp with a time zone, midnight in the session's zone (`2025-02-01 00:00:00-08:00`). The scorer already treated a midnight timestamp as its date (EXP-04), but not one with a time zone. It does now, and the same query matches the reference.
+- **wq12 is a real miss, partly from the question's wording.** "How much total fare did completed rides ... bring in" led the agent to revenue (completed payments, per the data notes) instead of the rides' fares, and it matched rides to weather by drop-off date instead of request date. The question stays as written.
+- Every weather-and-rides query joined through the rider's city and the ride's date, as intended.
+- **Cost:** the weather table adds about 430 input tokens to every SQL question (main set 5,104 per question, from 4,671). Billed input stays about the same thanks to caching: 1,878 per question (1,815 in EXP-09).
+- **In the app:** "Were Toronto riders more likely to cancel on snowy days?" joins rides, users and `external.weather_daily` and answers 9.32% on snowy days against 9.84% on other days, from 601 and 1,961 rides. That's no real difference, as expected from synthetic ride data.

@@ -67,6 +67,7 @@ class DatabaseUtil:
         sample_rows: int = 3,
         masked_columns: tuple = ("email", "phone"),
         max_listed_values: int = 10,
+        qualify_names: bool = False,
     ) -> str:
         """
         Build a compact text description of the database for the LLM:
@@ -82,6 +83,7 @@ class DatabaseUtil:
             sample_rows: number of example rows per table.
             masked_columns: columns whose sample values are replaced with <hidden>.
             max_listed_values: list a text column's values if it has at most this many.
+            qualify_names: write tables as schema.table (for schemas other than public).
         """
         try:
             connection = self._connect()
@@ -108,7 +110,7 @@ class DatabaseUtil:
 
                 for table_name in tables_list:
                     table_id = sql.SQL("{}.{}").format(sql.Identifier(schema_name), sql.Identifier(table_name))
-                    lines.append(f"\nTable: {table_name}")
+                    lines.append(f"\nTable: {schema_name + '.' if qualify_names else ''}{table_name}")
 
                     # Columns and data types, in table order
                     cursor.execute(

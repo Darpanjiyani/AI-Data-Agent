@@ -304,3 +304,22 @@ def drop_external_tables(prefix: str) -> None:
                 cursor.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(SCHEMA, name)))
     finally:
         connection.close()
+
+
+def drop_external_table(table_name: str) -> dict:
+    """Drop one loaded table in the external schema. For people only (utils/drop_loaded_table.py):
+    the ETL agent has no tool for this, and the ride-sharing tables are out of the writer's reach."""
+    if not isinstance(table_name, str) or not TABLE_NAME.match(table_name):
+        return {"ok": False, "message": f"{table_name!r} isn't a valid table name."}
+    connection = _writer_connection()
+    try:
+        with connection, connection.cursor() as cursor:
+            cursor.execute("SET LOCAL lock_timeout = '5s'")
+            cursor.execute("SELECT to_regclass(%s)", (f"{SCHEMA}.{table_name}",))
+            if cursor.fetchone()[0] is None:
+                return {"ok": False, "message": f"There's no table {SCHEMA}.{table_name}."}
+            cursor.execute(sql.SQL("DROP TABLE {}").format(sql.Identifier(SCHEMA, table_name)))
+    finally:
+        connection.close()
+    return {"ok": True, "message": f"Dropped {SCHEMA}.{table_name}."}
+

@@ -1,0 +1,155 @@
+{
+  "summary": {
+    "run_at": "2026-10-23T01:28:48",
+    "reference_mode": false,
+    "passed": 6,
+    "total": 6,
+    "accuracy": 100.0,
+    "by_category": {
+      "tool": [
+        6,
+        6
+      ]
+    },
+    "avg_seconds": 0.075,
+    "avg_input_tokens": 0.0,
+    "avg_output_tokens": 0.0,
+    "avg_tool_calls": 1.0,
+    "agent_errors": 0,
+    "db_unchanged": null
+  },
+  "results": [
+    {
+      "id": "k01",
+      "category": "tool",
+      "request": "Paginated API: the tool reads all 3 pages (23 rides), not just the first",
+      "passed": true,
+      "reason": "23 rows",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "extract",
+          "args": {},
+          "result": "Extracted 23 rows from 3 pages and saved them to C:\\Users\\darpa\\Downloads\\Resume_Projects\\AI Data Agent\\data\\etl_eval\\output\\k01\\rides_page1.csv. Columns: ride_id, city, fare, status."
+        }
+      ],
+      "error": "",
+      "seconds": 0.11,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "k02",
+      "category": "tool",
+      "request": "Open-Meteo layout (columns of values): one row per day, not one row of lists",
+      "passed": true,
+      "reason": "31 rows",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "extract",
+          "args": {},
+          "result": "Extracted 31 rows from 1 page and saved them to C:\\Users\\darpa\\Downloads\\Resume_Projects\\AI Data Agent\\data\\etl_eval\\output\\k02\\weather_toronto_jan2025.csv. Columns: time, temperature_2m_max, temperature_2m_min, precipitation_sum, snowfall_sum, latitude, longitude, utc_offset_seconds, timezone, timezone_abbreviation, elevation. Notes: the 'daily' values were stored as columns and were turned into one row per entry."
+        }
+      ],
+      "error": "",
+      "seconds": 0.04,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "k03",
+      "category": "tool",
+      "request": "A list of locations in one response: one table, with each row's coordinates",
+      "passed": true,
+      "reason": "21 rows",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "extract",
+          "args": {},
+          "result": "Extracted 21 rows from 1 page and saved them to C:\\Users\\darpa\\Downloads\\Resume_Projects\\AI Data Agent\\data\\etl_eval\\output\\k03\\weather_multi_mar2025.parquet. Columns: time, temperature_2m_max, temperature_2m_min, precipitation_sum, latitude, longitude, utc_offset_seconds, timezone, timezone_abbreviation, elevation. Notes: the response held 3 locations; they were combined into one table with each location's coordinates on its rows."
+        }
+      ],
+      "error": "",
+      "seconds": 0.2,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "k04",
+      "category": "tool",
+      "request": "Two downloads into one folder: two files, the second doesn't overwrite the first",
+      "passed": true,
+      "reason": "two files, 28 and 28 rows",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "extract",
+          "args": {},
+          "result": "Extracted 28 rows from 1 page and saved them to C:\\Users\\darpa\\Downloads\\Resume_Projects\\AI Data Agent\\data\\etl_eval\\output\\k04\\weather_toronto_feb2025.csv. Columns: time, temperature_2m_max, temperature_2m_min, precipitation_sum, latitude, longitude, utc_offset_seconds, timezone, timezone_abbreviation, elevation. Notes: the 'daily' values were stored as columns and were turned into one row per entry.\nExtracted 28 rows from 1 page and saved them to C:\\Users\\darpa\\Downloads\\Resume_Projects\\AI Data Agent\\data\\etl_eval\\output\\k04\\weather_montreal_feb2025.csv. Columns: time, temperature_2m_max, temperature_2m_min, precipitation_sum, latitude, longitude, utc_offset_seconds, timezone, timezone_abbreviation, elevation. Notes: the 'daily' values were stored as columns and were turned into one row per entry."
+        }
+      ],
+      "error": "",
+      "seconds": 0.03,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "k05",
+      "category": "tool",
+      "request": "A next link to a different host is not followed, and the tool says so",
+      "passed": true,
+      "reason": "3 rows, link to another host not followed",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "extract",
+          "args": {},
+          "result": "Extracted 3 rows from 1 page and saved them to C:\\Users\\darpa\\Downloads\\Resume_Projects\\AI Data Agent\\data\\etl_eval\\output\\k05\\rides_foreign_page1.csv. Columns: ride_id, city, fare. Notes: a next link to another host (other-host.invalid) was not followed."
+        }
+      ],
+      "error": "",
+      "seconds": 0.02,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "k06",
+      "category": "tool",
+      "request": "8 locations, each answered with its grid cell's coordinates: every row also says which requested point it belongs to, and the timing field is dropped",
+      "passed": true,
+      "reason": "112 rows; each tied to one of the 8 requested points, in order",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "extract",
+          "args": {},
+          "result": "Extracted 112 rows from 1 page and saved them to C:\\Users\\darpa\\Downloads\\Resume_Projects\\AI Data Agent\\data\\etl_eval\\output\\k06\\weather_8cities_jan2025_de6786.csv. Columns: time, temperature_2m_max, temperature_2m_min, precipitation_sum, snowfall_sum, wind_speed_10m_max, requested_latitude, requested_longitude, latitude, longitude, utc_offset_seconds, timezone, .... Notes: the response held 8 locations; they were combined into one table with each location's coordinates on its rows; requested_latitude and requested_longitude are the point each row answers, as written in the URL, while latitude and longitude are the weather grid cell the API used, which can be a few km away, so match locations on the requested columns."
+        }
+      ],
+      "error": "",
+      "seconds": 0.05,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    }
+  ]
+}

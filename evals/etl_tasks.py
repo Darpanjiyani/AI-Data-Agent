@@ -54,6 +54,36 @@ def _multi_city_weather():
     return pd.concat(frames, ignore_index=True)
 
 
+# EXP-14: the 8 cities in the ride data, in the order the weather URL asks for them
+WEATHER_CITIES = [("Toronto", 43.65, -79.38), ("Montreal", 45.50, -73.57), ("Ottawa", 45.42, -75.70),
+                  ("Edmonton", 53.55, -113.49), ("Halifax", 44.65, -63.57), ("Vancouver", 49.28, -123.12),
+                  ("Winnipeg", 49.90, -97.14), ("Calgary", 51.05, -114.07)]
+WEATHER_URL = ("{api}/weather_8cities_jan2025.json?latitude=" + ",".join(f"{c[1]:.2f}" for c in WEATHER_CITIES)
+               + "&longitude=" + ",".join(f"{c[2]:.2f}" for c in WEATHER_CITIES)
+               + "&start_date=2025-01-01&end_date=2025-01-14&daily=temperature_2m_max,temperature_2m_min,"
+                 "precipitation_sum,snowfall_sum,wind_speed_10m_max&timezone=auto")
+# The same request against the real API, for every day of the ride data. This is the URL to use in the app.
+LIVE_WEATHER_URL = ("https://archive-api.open-meteo.com/v1/archive?latitude="
+                    + ",".join(f"{c[1]:.2f}" for c in WEATHER_CITIES)
+                    + "&longitude=" + ",".join(f"{c[2]:.2f}" for c in WEATHER_CITIES)
+                    + "&start_date=2025-01-01&end_date=2026-07-30&daily=temperature_2m_max,temperature_2m_min,"
+                      "precipitation_sum,snowfall_sum,wind_speed_10m_max&timezone=auto")
+WEATHER_COLUMNS = {"temperature_2m_max": "temp_max_c", "temperature_2m_min": "temp_min_c",
+                   "precipitation_sum": "precipitation_mm", "snowfall_sum": "snowfall_cm",
+                   "wind_speed_10m_max": "wind_max_kmh"}
+
+
+def _weather_8cities():
+    """The table the weather pipeline should produce. Like the real Open-Meteo API, the
+    response lists the locations in the order they were requested, but each location's
+    coordinates are its weather grid cell's, a few km from the requested point."""
+    frames = []
+    for (city, _, _), location in zip(WEATHER_CITIES, _api("weather_8cities_jan2025.json")):
+        frame = pd.DataFrame(location["daily"]).rename(columns={"time": "date", **WEATHER_COLUMNS})
+        frames.append(frame.assign(city=city))
+    return pd.concat(frames, ignore_index=True)[["city", "date", *WEATHER_COLUMNS.values()]]
+
+
 def _clean_amount(text):
     return float(str(text).replace("CAD", "").replace("$", "").replace(",", "").strip())
 
@@ -336,6 +366,11 @@ TOOL_TESTS = [
      "description": "A next link to a different host is not followed, and the tool says so",
      "calls": [{"url": "{api}/rides_foreign_page1.json", "output_folder": "data/etl_eval/output/k05", "format": "csv"}],
      "rows": 3},
+    {"id": "k06", "category": "tool", "direct": "extract", "expect": "requested_points",
+     "description": "8 locations, each answered with its grid cell's coordinates: every row also says which "
+                    "requested point it belongs to, and the timing field is dropped",
+     "calls": [{"url": WEATHER_URL, "output_folder": "data/etl_eval/output/k06", "format": "csv"}],
+     "rows": 112, "columns": ["time", "requested_latitude", "requested_longitude", "precipitation_sum"]},
 ]
 
 
@@ -380,6 +415,27 @@ LOAD_TASKS = [
 ]
 
 
+# ---------------------------------------------------------------- EXP-14: weather for the 8 cities
+# The weather pipeline as a person would ask for it. The column names are fixed because the
+# SQL questions about weather (evals/weather_questions.json) are written against them.
+_WEATHER_ASK = ("{url} has daily weather for the 8 cities in our ride data: "
+                "43.65,-79.38 is Toronto, 45.50,-73.57 is Montreal, 45.42,-75.70 is Ottawa, "
+                "53.55,-113.49 is Edmonton, 44.65,-63.57 is Halifax, 49.28,-123.12 is Vancouver, "
+                "49.90,-97.14 is Winnipeg, 51.05,-114.07 is Calgary. "
+                "Keep one row per city per day with exactly these columns: city (the city name), date, "
+                "temp_max_c, temp_min_c, precipitation_mm, snowfall_cm, wind_max_kmh.")
+WEATHER_TASKS = [
+    {"id": "w01", "category": "pipeline", "format": "csv",
+     "request": _WEATHER_ASK.replace("{url}", WEATHER_URL) + " Save it as CSV in {out}.",
+     "reference": _weather_8cities, "exact_columns": True,
+     "columns": {name: [name] for name in ["city", "date", *WEATHER_COLUMNS.values()]}},
+    {"id": "w02", "category": "load", "expect": "pending_load", "table": "eval_weather_8cities", "rows": 112,
+     "date_column": "date", "cities": [c[0] for c in WEATHER_CITIES],
+     "request": _WEATHER_ASK.replace("{url}", WEATHER_URL)
+                + " Then load it into the database as a table called eval_weather_8cities."},
+]
+
+
 # Optional: one task against the real Open-Meteo API (--live). The values are unknown in
 # advance, so only the shape is checked: 31 rows, the requested columns, no missing values.
 LIVE_TASKS = [
@@ -394,4 +450,9 @@ LIVE_TASKS = [
                  "temperature_2m_max": ["temperature_2m_max", "daily.temperature_2m_max", "daily_temperature_2m_max"],
                  "temperature_2m_min": ["temperature_2m_min", "daily.temperature_2m_min", "daily_temperature_2m_min"],
                  "precipitation_sum": ["precipitation_sum", "daily.precipitation_sum", "daily_precipitation_sum"]}},
+    # EXP-14: the real weather pipeline, every day of the ride data (2025-01-01 to 2026-07-30 = 576 days)
+    {"id": "l02", "category": "live", "format": "csv", "expect": "live_weather",
+     "request": _WEATHER_ASK.replace("{url}", LIVE_WEATHER_URL) + " Save it as CSV in {out}.",
+     "reference": None, "rows": 8 * 576, "cities": [c[0] for c in WEATHER_CITIES],
+     "columns": {name: [name] for name in ["city", "date", *WEATHER_COLUMNS.values()]}},
 ]

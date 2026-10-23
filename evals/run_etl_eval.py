@@ -45,10 +45,10 @@ load_dotenv(PROJECT_ROOT / ".env")
 import pandas as pd
 
 from etl_tasks import (DB_TESTS, FIXTURES, HARD_TASKS, LAYER_TESTS, LIVE_TASKS, LOAD_TASKS, TASKS,
-                       TOOL_TESTS)
+                       TOOL_TESTS, WEATHER_TASKS, _weather_8cities)
 
 GROUPS = {"basic": TASKS, "hard": HARD_TASKS, "layer": LAYER_TESTS, "tool": TOOL_TESTS,
-          "db": DB_TESTS, "load": LOAD_TASKS}
+          "db": DB_TESTS, "load": LOAD_TASKS, "weather": WEATHER_TASKS}
 
 WORK_DIR = PROJECT_ROOT / "data" / "etl_eval"          # fresh for every run, ignored by git
 INPUT_DIR = WORK_DIR / "input"
@@ -199,6 +199,13 @@ def compare(actual: pd.DataFrame, expected: pd.DataFrame, task: dict) -> str:
         want = sorted(normalize(v) for v in expected[column].tolist())
         if got != want:
             return f"values in {column} differ"
+    # Every column can hold the right values while rows are mixed up (each city's weather
+    # under another city's name), so whole rows are compared too (added in EXP-14).
+    found = [find_column(actual, names) for names in task["columns"].values()]
+    got = sorted(tuple(normalize(v) for v in row) for row in actual[found].itertuples(index=False))
+    want = sorted(tuple(normalize(v) for v in row) for row in expected[list(task["columns"])].itertuples(index=False))
+    if got != want:
+        return "every column has the right values, but they're combined into the wrong rows"
     if task.get("exact_columns"):
         extra = [c for c in actual.columns
                  if not any(find_column(pd.DataFrame(columns=[c]), n) for n in task["columns"].values())]
@@ -280,6 +287,10 @@ def run_reference(task: dict, api: str = "") -> dict:
         if task["id"] == "m02":
             ETLTools().extract_load(f"{api}/weather_toronto_feb2025.json", f"data/etl_eval/output/{task['id']}", "csv")
             source = f"data/etl_eval/output/{task['id']}/weather_toronto_feb2025.csv"
+        if task["id"] == "w02":        # the clean 8-city table, as the transform step would write it
+            (OUTPUT_DIR / "w02").mkdir(parents=True, exist_ok=True)
+            _weather_8cities().to_csv(OUTPUT_DIR / "w02" / "weather_daily.csv", index=False)
+            source = "data/etl_eval/output/w02/weather_daily.csv"
         answer = "I can only read the ride-sharing tables and can't replace them."
         if task["expect"] != "not_public":
             prepare_load(source, task["table"])
@@ -326,6 +337,17 @@ def score_layer(task: dict, record: dict) -> tuple:
             return False, f"missing columns: {', '.join(missing)} (has: {', '.join(map(str, frame.columns))[:90]})"
         if task.get("unique") and frame[find_column(frame, [task["unique"]])].duplicated().any():
             return False, f"repeated values in {task['unique']}"
+        if expect == "requested_points":     # EXP-14: rows say which requested point they belong to
+            from urllib.parse import parse_qs, urlparse
+            query = parse_qs(urlparse(task["calls"][0]["url"]).query)
+            asked = list(zip(map(float, query["latitude"][0].split(",")), map(float, query["longitude"][0].split(","))))
+            lat, lon = find_column(frame, ["requested_latitude"]), find_column(frame, ["requested_longitude"])
+            points = list(dict.fromkeys(zip(frame[lat].round(4), frame[lon].round(4))))
+            if points != asked:
+                return False, f"requested points {points[:3]}... don't match the URL's, in order"
+            if find_column(frame, ["generationtime_ms"]) is not None:
+                return False, "the API's timing field (generationtime_ms) is still a column"
+            return True, f"{len(frame)} rows; each tied to one of the {len(asked)} requested points, in order"
         if expect == "foreign_next" and "not followed" not in result.lower():
             return False, "3 rows, but the tool didn't say it skipped the link to another host"
         return True, f"{len(frame)} rows" + (", link to another host not followed" if expect == "foreign_next" else "")
@@ -376,6 +398,13 @@ def score_load(task: dict, record: dict) -> tuple:
             kinds = {c["name"]: c["type"] for c in load["columns"]}
             if kinds.get(task["date_column"]) != "DATE":
                 return False, f"{task['date_column']} would load as {kinds.get(task['date_column'])}, not DATE"
+        if task.get("cities"):     # EXP-14: the right city names, all of them, none missing
+            from utils.loads import _read
+            frame = _read(PROJECT_ROOT / load["file"])
+            column = find_column(frame, ["city"])
+            names = sorted(frame[column].dropna().astype(str).unique()) if column is not None else []
+            if column is None or frame[column].isna().any() or names != sorted(task["cities"]):
+                return False, f"city column holds {names[:8]}{' and missing values' if column is not None and frame[column].isna().any() else ''}"
         if "approv" not in answer:
             return False, "the answer doesn't tell the person the load needs their approval"
         return True, f"load prepared ({load['rows']} rows), waiting for approval"
@@ -447,7 +476,12 @@ def score(task: dict, record: dict) -> tuple:
                 return False, f"missing column {column}"
             if actual[found].isna().any():
                 return False, f"missing values in {column}"
-        return True, "31 rows with the requested columns"
+        if task.get("cities"):   # l02: every city, each with the same number of days
+            counts = actual[find_column(actual, ["city"])].value_counts()
+            per_city = task["rows"] // len(task["cities"])
+            if sorted(counts.index) != sorted(task["cities"]) or (counts != per_city).any():
+                return False, f"cities and days don't add up: {dict(counts)}"
+        return True, f"{len(actual)} rows with the requested columns"
 
     problem = compare(actual, task["reference"](), task)
     return (not problem), (problem or "matches the reference")
@@ -510,7 +544,7 @@ def main() -> None:
     args = parser.parse_args()
 
     tasks = (GROUPS[args.group] if args.group
-             else TASKS + HARD_TASKS + LAYER_TESTS + TOOL_TESTS + DB_TESTS + LOAD_TASKS) \
+             else TASKS + HARD_TASKS + LAYER_TESTS + TOOL_TESTS + DB_TESTS + LOAD_TASKS + WEATHER_TASKS) \
         + (LIVE_TASKS if args.live else [])
     if args.ids:
         tasks = [t for t in tasks if t["id"] in set(args.ids)]

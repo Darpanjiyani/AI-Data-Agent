@@ -87,7 +87,11 @@ def get_load(load_id: str):
 def approve_load(load_id: str) -> dict:
     """Carry out a prepared load. Only the app's Approve button (a person) calls this."""
     from utils.loads import approve_load as _approve
-    return _approve(load_id)
+    result = _approve(load_id)
+    if result.get("ok"):   # the SQL agent describes the schema once per process: refresh it
+        from agents.sql_analyst import get_schema_context
+        get_schema_context.cache_clear()
+    return result
 
 
 def cancel_load(load_id: str) -> dict:

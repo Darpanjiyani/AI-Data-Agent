@@ -5,7 +5,7 @@ import sys
 import subprocess
 import tempfile
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
 import pandas as pd
@@ -89,20 +89,55 @@ def _column_block(data: dict):
     return "daily" if "daily" in blocks else blocks[0]
 
 
-def response_to_table(data) -> tuple:
+# Fields an API adds about the request itself, not the data (Open-Meteo: how long it took)
+RESPONSE_ONLY_FIELDS = ("generationtime_ms",)
+
+
+def requested_points(url: str, count: int):
+    """The (latitude, longitude) points a URL asked for, in order, if there are `count` of them.
+
+    Weather APIs such as Open-Meteo answer each point with the coordinates of the grid cell
+    they used, a few km away, so the response alone can't say which requested point
+    (and so which city) each location is. The URL can: answers come back in its order."""
+    query = parse_qs(urlparse(url).query)
+    try:
+        latitudes = [float(v) for v in query["latitude"][0].split(",")]
+        longitudes = [float(v) for v in query["longitude"][0].split(",")]
+    except (KeyError, ValueError):
+        return None
+    if len(latitudes) != count or len(longitudes) != count:
+        return None
+    return list(zip(latitudes, longitudes))
+
+
+def response_to_table(data, url: str = "") -> tuple:
     """(DataFrame, note) for one API response."""
     if isinstance(data, dict) and _column_block(data):
         key = _column_block(data)
         frame = pd.DataFrame(data[key])
+        points = requested_points(url, 1)
+        if points:
+            frame["requested_latitude"], frame["requested_longitude"] = points[0]
         for name, value in data.items():   # coordinates, timezone... repeated on every row
-            if not isinstance(value, (dict, list)) and name not in frame.columns:
+            if not isinstance(value, (dict, list)) and name not in frame.columns and name not in RESPONSE_ONLY_FIELDS:
                 frame[name] = value
         return frame, f"the '{key}' values were stored as columns and were turned into one row per entry"
     if isinstance(data, list) and data and all(isinstance(item, dict) and _column_block(item) for item in data):
-        frames = [response_to_table(item)[0] for item in data]
-        return (pd.concat(frames, ignore_index=True),
-                f"the response held {len(data)} locations; they were combined into one table "
+        points = requested_points(url, len(data))
+        frames = []
+        for index, item in enumerate(data):
+            frame = response_to_table(item)[0]
+            if points:   # which requested point this location answers, next to the data
+                frame.insert(len(item[_column_block(item)]), "requested_latitude", points[index][0])
+                frame.insert(len(item[_column_block(item)]) + 1, "requested_longitude", points[index][1])
+            frames.append(frame)
+        note = (f"the response held {len(data)} locations; they were combined into one table "
                 "with each location's coordinates on its rows")
+        if points:
+            note += ("; requested_latitude and requested_longitude are the point each row answers, as written "
+                     "in the URL, while latitude and longitude are the weather grid cell the API used, which can "
+                     "be a few km away, so match locations on the requested columns")
+        return pd.concat(frames, ignore_index=True), note
     if isinstance(data, dict):
         for key in RECORD_KEYS:
             if isinstance(data.get(key), list):
@@ -118,6 +153,37 @@ def source_name(url: str) -> str:
     if parts.query:
         stem += "_" + hashlib.sha1(parts.query.encode("utf-8")).hexdigest()[:6]
     return stem
+
+
+def folder_snapshot(folder: Path) -> dict:
+    """{file: modification time} for the files under a folder (empty if it doesn't exist)."""
+    if not folder.exists():
+        return {}
+    return {f: f.stat().st_mtime for f in folder.rglob("*") if f.is_file()}
+
+
+def describe_written_files(folder: Path, before: dict) -> list:
+    """One line per file created or changed in `folder` since `before`: its path, rows and columns,
+    so the agent reports what was really written instead of what it meant to write (EXP-14)."""
+    lines = []
+    for path, mtime in sorted(folder_snapshot(folder).items()):
+        if before.get(path) == mtime:
+            continue
+        shown = path.relative_to(PROJECT_ROOT).as_posix() if path.is_relative_to(PROJECT_ROOT) else str(path)
+        try:
+            suffix = path.suffix.lower()
+            frame = (pd.read_csv(path) if suffix == ".csv" else pd.read_parquet(path) if suffix == ".parquet"
+                     else pd.read_json(path, lines=True) if suffix in (".json", ".jsonl") else None)
+        except ValueError:
+            frame = pd.read_json(path) if path.suffix.lower() == ".json" else None
+        except Exception:
+            frame = None
+        if frame is None:
+            lines.append(shown)
+        else:
+            columns = ", ".join(map(str, frame.columns[:12])) + (", ..." if len(frame.columns) > 12 else "")
+            lines.append(f"{shown}: {len(frame)} rows; columns: {columns}")
+    return lines
 
 
 class ETLTools:
@@ -160,7 +226,7 @@ class ETLTools:
                 break
             pages += 1
             try:
-                frame, note = response_to_table(data)
+                frame, note = response_to_table(data, page_url)
             except Exception as e:
                 return f"Failed to convert the API response to a table: {e}"
             frames.append(frame)

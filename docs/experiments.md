@@ -19,6 +19,8 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 | [EXP-12 part 1](experiments-etl.md#exp-12-part-1--code-guard-for-generated-pandas-code) | 2026-10-15 | ETL: code guard for generated pandas code | safety layers **10/10** (was 4/9); ETL tasks **26/27** | – | 4,665 per task |
 | [EXP-12 part 2](experiments-etl.md#exp-12-part-2--a-smarter-extract-tool) | 2026-10-21 | ETL: smarter extract tool (pagination, columns of values, file names) | ETL **42/43** (tool 5/5, layers 10/10, tasks 27/28 incl. live) | – | 4,095 per task |
 | [EXP-13](experiments-etl.md#exp-13--loading-into-postgresql-with-a-persons-approval) | 2026-10-21 | ETL: loading into PostgreSQL with a person's approval | ETL **56/56** (database checks 10/10, was 4/10; load 4/4) | – | 5,676 per task |
+| [EXP-14 part 1](experiments-etl.md#exp-14-part-1--weather-for-the-8-cities) | 2026-10-23 | ETL: weather for the 8 cities; 12 weather + rides questions written | ETL **60/61** incl. live (tool 6/6) | – | 5,177 per task |
+| [EXP-14 part 2](experiments-etl.md#exp-14-part-2--the-sql-agent-reads-loaded-tables) | 2026-10-23 | SQL agent reads loaded tables (external schema) | weather set **11/12**⁷ (was 0/12); main **47/47** | weather **11/12**; main **100%** | 5,104 (**1,878 billed**) |
 
 ¹ 95% as first scored; the one miss was a scoring bug (date vs midnight timestamp), fixed and re-scored.
 ² The one "incorrect" verdict was a judge error; its own reasoning found every value correct.
@@ -26,6 +28,7 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 ⁴ 14 follow-up conversations run 3 times; only the last turn of each is scored. The main set was run once as a regression check.
 ⁵ Final version: check set run 3 times; fresh and original follow-up sets once; main and held-out sets once after part 1 (part 2 doesn't change single-question SQL) and routing re-checked after part 2. All 16 follow-up change requests were clearly refused.
 ⁶ h06 is the question that failed in 3 of the 6 main-set runs before this change. In these runs the sanity check caught its wrong-shape query twice (once in the 5 solo runs, once in the main run) and the rewritten query was correct both times.
+⁷ 10/12 as first scored; wq06 was correct (a midnight timestamp with a time zone, which the scorer now accepts). The one real miss, wq12, used payments and the drop-off date.
 
 ---
 
