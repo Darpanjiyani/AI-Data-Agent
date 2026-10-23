@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -116,6 +117,45 @@ def render_result(reply, key: str) -> None:
                 st.write("The query returned no rows.")
 
 
+LOAD_STATUS = {
+    "approved": ("Loaded", ":material/check_circle:"),
+    "cancelled": ("Cancelled: nothing was loaded", ":material/cancel:"),
+    "failed": ("Not loaded", ":material/error:"),
+}
+
+
+def render_load(load_id: str, key: str) -> None:
+    """A load the ETL agent prepared: preview, checks, and Approve / Cancel for a person (EXP-13)."""
+    service = load_agent()
+    load = service.get_load(load_id)
+    if load is None:
+        return
+    with st.container(border=True):
+        st.markdown(f"**Load into `external.{load['table']}`** · {load['rows']:,} rows from `{load['file']}`"
+                    f" · {'replace' if load['mode'] == 'replace' else 'append'}")
+        types = ", ".join(f"`{c['name']}` {c['type'].lower()}" for c in load["columns"])
+        st.caption(f"Columns: {types}")
+        checks = load["checks"]
+        notes = [f"{checks['duplicate_rows']} duplicate rows" if checks["duplicate_rows"] else "No duplicate rows"]
+        notes.append("missing values in " + ", ".join(f"{k} ({v})" for k, v in checks["missing_values"].items())
+                     if checks["missing_values"] else "no missing values")
+        st.caption(" · ".join(notes))
+        if load["preview"]:
+            st.dataframe(pd.DataFrame(load["preview"]), hide_index=True, width="stretch")
+
+        if load["status"] == "pending":
+            st.caption("Nothing has been written yet. Review the preview, then approve or cancel.")
+            buttons = st.container(horizontal=True, gap="small")
+            buttons.button("Approve load", key=f"approve_{load_id}_{key}", type="primary",
+                           icon=":material/database_upload:", on_click=service.approve_load, args=(load_id,))
+            buttons.button("Cancel", key=f"cancel_{load_id}_{key}", icon=":material/close:",
+                           on_click=service.cancel_load, args=(load_id,))
+        else:
+            label, icon = LOAD_STATUS.get(load["status"], (load["status"], ":material/info:"))
+            show = st.success if load["status"] == "approved" else st.info if load["status"] == "cancelled" else st.error
+            show(f"{label}. {load['result']}" if load["status"] != "approved" else load["result"], icon=icon)
+
+
 def render_reply(reply, key: str) -> None:
     # Badges: which agent answered, and anything unusual
     badges = st.container(horizontal=True, gap="small")
@@ -159,6 +199,9 @@ def render_reply(reply, key: str) -> None:
             st.code(json.dumps(action["args"], indent=2), language="json")
             if action["result"]:
                 st.code(action["result"], language="text", wrap_lines=True)
+
+    for load_id in getattr(reply, "pending_loads", []) or []:
+        render_load(load_id, key)
 
     with st.expander("How the agent answered", icon=":material/route:"):
         for step in reply.steps:

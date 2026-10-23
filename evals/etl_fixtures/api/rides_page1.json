@@ -1,0 +1,68 @@
+{
+ "page": 1,
+ "total_pages": 3,
+ "total_results": 23,
+ "next": "{base}/rides_page2.json",
+ "results": [
+  {
+   "ride_id": 5000,
+   "city": "Toronto",
+   "fare": 30.85,
+   "status": "completed"
+  },
+  {
+   "ride_id": 5001,
+   "city": "Toronto",
+   "fare": 28.01,
+   "status": "cancelled"
+  },
+  {
+   "ride_id": 5002,
+   "city": "Ottawa",
+   "fare": 34.16,
+   "status": "completed"
+  },
+  {
+   "ride_id": 5003,
+   "city": "Montreal",
+   "fare": 8.82,
+   "status": "completed"
+  },
+  {
+   "ride_id": 5004,
+   "city": "Montreal",
+   "fare": 36.8,
+   "status": "completed"
+  },
+  {
+   "ride_id": 5005,
+   "city": "Ottawa",
+   "fare": 47.15,
+   "status": "completed"
+  },
+  {
+   "ride_id": 5006,
+   "city": "Ottawa",
+   "fare": 47.85,
+   "status": "completed"
+  },
+  {
+   "ride_id": 5007,
+   "city": "Montreal",
+   "fare": 22.59,
+   "status": "completed"
+  },
+  {
+   "ride_id": 5008,
+   "city": "Ottawa",
+   "fare": 18.19,
+   "status": "cancelled"
+  },
+  {
+   "ride_id": 5009,
+   "city": "Toronto",
+   "fare": 19.6,
+   "status": "completed"
+  }
+ ]
+}

@@ -6,7 +6,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.llm_pick import pick_llm
 from utils.database import DatabaseUtil, reader_connection_details
 from utils.sql_guard import is_read_only
-from utils.schema_notes import AGENT_TABLES, DATA_NOTES
+from utils.schema_notes import AGENT_TABLES, DATA_NOTES, EXTERNAL_SCHEMA
 from utils.result_checks import result_issue
 import json
 from functools import lru_cache
@@ -40,6 +40,13 @@ def get_schema_context() -> str:
     schema_info = db.schema_details("public", tables=AGENT_TABLES)
     if schema_info.startswith("Error"):
         get_schema_context.cache_clear()  # don't cache a failed attempt
+        return schema_info
+    # Tables a person approved loading (EXP-13), e.g. daily weather per city (EXP-14)
+    loaded = db.schema_details(EXTERNAL_SCHEMA, qualify_names=True)
+    if not loaded.startswith("Error") and "\nTable: " in loaded:
+        schema_info += ("\n\nLoaded data: tables in the external schema were loaded from outside sources "
+                        "after a person approved them. Always write them with the schema name, "
+                        "as listed (external.<table>).\n" + loaded)
     return schema_info
 
 # ---------------------------- AI Agent Code -----------------------------------------------

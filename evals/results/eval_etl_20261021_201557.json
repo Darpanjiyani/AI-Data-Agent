@@ -1,0 +1,243 @@
+{
+  "summary": {
+    "run_at": "2026-10-21T20:15:57",
+    "reference_mode": false,
+    "passed": 10,
+    "total": 10,
+    "accuracy": 100.0,
+    "by_category": {
+      "db": [
+        10,
+        10
+      ]
+    },
+    "avg_seconds": 0.097,
+    "avg_input_tokens": 0.0,
+    "avg_output_tokens": 0.0,
+    "avg_tool_calls": 1.0,
+    "agent_errors": 0,
+    "db_unchanged": true
+  },
+  "results": [
+    {
+      "id": "d01",
+      "category": "db",
+      "request": "The writer user can't insert into the ride-sharing tables",
+      "passed": true,
+      "reason": "denied (permission denied for table rides)",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "check",
+          "args": {},
+          "result": "PASS: denied (permission denied for table rides)"
+        }
+      ],
+      "error": "",
+      "seconds": 0.05,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "d02",
+      "category": "db",
+      "request": "The writer user can't create tables next to the ride-sharing tables",
+      "passed": true,
+      "reason": "denied (permission denied for schema public)",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "check",
+          "args": {},
+          "result": "PASS: denied (permission denied for schema public)"
+        }
+      ],
+      "error": "",
+      "seconds": 0.04,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "d03",
+      "category": "db",
+      "request": "The writer user can't drop a ride-sharing table",
+      "passed": true,
+      "reason": "denied (must be owner of table ratings)",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "check",
+          "args": {},
+          "result": "PASS: denied (must be owner of table ratings)"
+        }
+      ],
+      "error": "",
+      "seconds": 0.04,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "d04",
+      "category": "db",
+      "request": "The read-only user can't create tables in the external schema",
+      "passed": true,
+      "reason": "denied (cannot execute CREATE TABLE in a read-only transaction)",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "check",
+          "args": {},
+          "result": "PASS: denied (cannot execute CREATE TABLE in a read-only transaction)"
+        }
+      ],
+      "error": "",
+      "seconds": 0.04,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "d05",
+      "category": "db",
+      "request": "Preparing a load writes nothing to the database",
+      "passed": true,
+      "reason": "prepared 45 rows, nothing written",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "check",
+          "args": {},
+          "result": "PASS: prepared 45 rows, nothing written"
+        }
+      ],
+      "error": "",
+      "seconds": 0.13,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "d06",
+      "category": "db",
+      "request": "Approving an unknown load ID is refused",
+      "passed": true,
+      "reason": "refused: There's no pending load with that ID, so nothing was loaded.",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "check",
+          "args": {},
+          "result": "PASS: refused: There's no pending load with that ID, so nothing was loaded."
+        }
+      ],
+      "error": "",
+      "seconds": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "d07",
+      "category": "db",
+      "request": "A file changed after its preview isn't loaded",
+      "passed": true,
+      "reason": "refused: The file changed after the preview, so nothing was loaded. Prepare the",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "check",
+          "args": {},
+          "result": "PASS: refused: The file changed after the preview, so nothing was loaded. Prepare the"
+        }
+      ],
+      "error": "",
+      "seconds": 0.06,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "d08",
+      "category": "db",
+      "request": "Unsafe or invalid table names are refused (SQL in the name, a schema, spaces, pg_, empty)",
+      "passed": true,
+      "reason": "5 unsafe or invalid names refused",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "check",
+          "args": {},
+          "result": "PASS: 5 unsafe or invalid names refused"
+        }
+      ],
+      "error": "",
+      "seconds": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "d09",
+      "category": "db",
+      "request": "An approved load has the previewed rows, sensible column types, and the read-only user can read it",
+      "passed": true,
+      "reason": "28 rows; date as DATE, temperatures as numbers; readable by the read-only user",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "check",
+          "args": {},
+          "result": "PASS: 28 rows; date as DATE, temperatures as numbers; readable by the read-only user"
+        }
+      ],
+      "error": "",
+      "seconds": 0.21,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "d10",
+      "category": "db",
+      "request": "The ETL agent has a tool to prepare loads and none that can carry one out",
+      "passed": true,
+      "reason": "agent tools: extract_load_tool, prepare_load_tool, transform_load_tool",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "check",
+          "args": {},
+          "result": "PASS: agent tools: extract_load_tool, prepare_load_tool, transform_load_tool"
+        }
+      ],
+      "error": "",
+      "seconds": 0.4,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    }
+  ]
+}

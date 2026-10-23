@@ -47,6 +47,7 @@ class AgentReply:
     cache_read_tokens: int = 0          # input read from the prompt cache (0.1x price)
     cache_write_tokens: int = 0         # input written to the prompt cache (1.25x price)
     billed_input_tokens: float = 0.0    # input cost in normal-price tokens
+    pending_loads: list = field(default_factory=list)  # IDs of loads waiting for a person's approval
 
 
 def ask(question: str, thread_id: str = "default", on_step: StepCallback = None) -> AgentReply:
@@ -67,7 +68,7 @@ def ask(question: str, thread_id: str = "default", on_step: StepCallback = None)
     turn = final.get("turn", {})
     reply = AgentReply(question=question)
     for name in ("route", "answer", "standalone_question", "used_history", "sql", "rows", "refused",
-                 "refusal_type", "retries", "error", "steps", "etl_actions"):
+                 "refusal_type", "retries", "error", "steps", "etl_actions", "pending_loads"):
         if name in turn:
             setattr(reply, name, turn[name])
 
@@ -75,6 +76,27 @@ def ask(question: str, thread_id: str = "default", on_step: StepCallback = None)
     for name, value in summarize_usage(usage.usage_metadata).items():
         setattr(reply, name, value)
     return reply
+
+
+def get_load(load_id: str):
+    """A prepared load and its current status (pending, approved, cancelled, failed)."""
+    from utils.loads import get_load as _get
+    return _get(load_id)
+
+
+def approve_load(load_id: str) -> dict:
+    """Carry out a prepared load. Only the app's Approve button (a person) calls this."""
+    from utils.loads import approve_load as _approve
+    result = _approve(load_id)
+    if result.get("ok"):   # the SQL agent describes the schema once per process: refresh it
+        from agents.sql_analyst import get_schema_context
+        get_schema_context.cache_clear()
+    return result
+
+
+def cancel_load(load_id: str) -> dict:
+    from utils.loads import cancel_load as _cancel
+    return _cancel(load_id)
 
 
 def forget(thread_id: str) -> None:

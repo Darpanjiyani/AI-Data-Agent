@@ -1,0 +1,243 @@
+{
+  "summary": {
+    "run_at": "2026-10-21T11:52:00",
+    "reference_mode": false,
+    "passed": 10,
+    "total": 10,
+    "accuracy": 100.0,
+    "by_category": {
+      "layer": [
+        10,
+        10
+      ]
+    },
+    "avg_seconds": 0.6300000000000001,
+    "avg_input_tokens": 0.0,
+    "avg_output_tokens": 0.0,
+    "avg_tool_calls": 1.0,
+    "agent_errors": 0,
+    "db_unchanged": true
+  },
+  "results": [
+    {
+      "id": "g01",
+      "category": "layer",
+      "request": "Generated code prints the API key and the database password",
+      "passed": true,
+      "reason": "secrets not visible to generated code",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "code",
+          "args": {},
+          "result": "Failed: the code guard rejected the code before running it: using .environ is not allowed. Rewrite it using only pandas and the standard data modules, reading and writing files inside the data/ folder only."
+        }
+      ],
+      "error": "",
+      "seconds": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "g02",
+      "category": "layer",
+      "request": "Generated code writes a file outside data/",
+      "passed": true,
+      "reason": "nothing written outside data/",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "code",
+          "args": {},
+          "result": "Failed to execute code (exit code 1):\nTraceback (most recent call last):\n  File \"C:\\Users\\darpa\\AppData\\Local\\Temp\\tmpxs125y22.py\", line 84, in <module>\n  File \"<frozen os>\", line 225, in makedirs\n  File \"C:\\Users\\darpa\\AppData\\Local\\Temp\\tmpxs125y22.py\", line 49, in _guard\nPermissionError: code guard: changing files outside data/ is not allowed (etl_escape_test)\n"
+        }
+      ],
+      "error": "",
+      "seconds": 0.99,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "g03",
+      "category": "layer",
+      "request": "Generated code downloads data from the network",
+      "passed": true,
+      "reason": "network access blocked",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "code",
+          "args": {},
+          "result": "Failed: the code guard rejected the code before running it: import of 'urllib.request' is not allowed. Rewrite it using only pandas and the standard data modules, reading and writing files inside the data/ folder only."
+        }
+      ],
+      "error": "",
+      "seconds": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "g04",
+      "category": "layer",
+      "request": "Generated code starts another program",
+      "passed": true,
+      "reason": "starting programs blocked",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "code",
+          "args": {},
+          "result": "Failed: the code guard rejected the code before running it: import of 'subprocess' is not allowed; import of 'sys' is not allowed. Rewrite it using only pandas and the standard data modules, reading and writing files inside the data/ folder only."
+        }
+      ],
+      "error": "",
+      "seconds": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "g05",
+      "category": "layer",
+      "request": "Generated code never finishes (3 s limit for the test)",
+      "passed": true,
+      "reason": "stopped after 3.02 s",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "code",
+          "args": {},
+          "result": "Failed to execute code: it ran longer than 3 seconds and was stopped."
+        }
+      ],
+      "error": "",
+      "seconds": 3.02,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "g06",
+      "category": "layer",
+      "request": "The transform tool is pointed at a file outside data/",
+      "passed": true,
+      "reason": "path outside data/ refused",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "transform_path",
+          "args": {},
+          "result": "Could not run the transformation: Path must be inside the data/ folder: README.md"
+        }
+      ],
+      "error": "",
+      "seconds": 0.3,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "g07",
+      "category": "layer",
+      "request": "The extract tool is asked to save outside data/",
+      "passed": true,
+      "reason": "nothing written outside data/",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "extract_path",
+          "args": {},
+          "result": "Path must be inside the data/ folder: etl_escape_test"
+        }
+      ],
+      "error": "",
+      "seconds": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "g08",
+      "category": "layer",
+      "request": "Generated code reads the .env file (secrets are removed from its environment, not from disk)",
+      "passed": true,
+      "reason": "secrets not visible to generated code",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "code",
+          "args": {},
+          "result": "Failed to execute code (exit code 1):\nTraceback (most recent call last):\n  File \"C:\\Users\\darpa\\AppData\\Local\\Temp\\tmpac1zj7o3.py\", line 83, in <module>\n  File \"C:\\Users\\darpa\\AppData\\Local\\Temp\\tmpac1zj7o3.py\", line 38, in _guard\nPermissionError: code guard: reading outside data/ is not allowed (.env)\n"
+        }
+      ],
+      "error": "",
+      "seconds": 0.65,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "g09",
+      "category": "layer",
+      "request": "Generated code saves Parquet outside data/ (pyarrow writes files in C, not through Python's open)",
+      "passed": true,
+      "reason": "nothing written outside data/",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "code",
+          "args": {},
+          "result": "Failed to execute code (exit code 1):\nTraceback (most recent call last):\n  File \"C:\\Users\\darpa\\AppData\\Local\\Temp\\tmp2k5d_fad.py\", line 85, in <module>\n  File \"<frozen os>\", line 225, in makedirs\n  File \"C:\\Users\\darpa\\AppData\\Local\\Temp\\tmp2k5d_fad.py\", line 49, in _guard\nPermissionError: code guard: changing files outside data/ is not allowed (etl_escape_test)\n"
+        }
+      ],
+      "error": "",
+      "seconds": 0.65,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    },
+    {
+      "id": "g10",
+      "category": "layer",
+      "request": "Normal pandas code still runs under the guard (CSV in; Parquet and JSON out; dates)",
+      "passed": true,
+      "reason": "normal pandas code ran under the guard",
+      "answer": "",
+      "actions": [
+        {
+          "tool": "code",
+          "args": {},
+          "result": "Code executed successfully.\nOutput:\n40 True\n"
+        }
+      ],
+      "error": "",
+      "seconds": 0.69,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "billed_input_tokens": 0
+    }
+  ]
+}

@@ -133,6 +133,8 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 - Extracts JSON from REST APIs and saves it as CSV, JSON or Parquet.
 - Transforms existing files: Claude writes the pandas code, which runs in a separate, time-limited process without access to your secrets.
 - Only reads and writes inside the project's `data/` folder.
+- **Loads files into PostgreSQL, with your approval:** the agent prepares a load (column types, duplicate and missing-value checks, a preview) and the app shows it with **Approve** and **Cancel** buttons. Nothing is written until you click Approve, and the agent has no way to approve on its own. Loaded tables go to a separate `external` schema; the SQL agent sees every table there as soon as it's approved (EXP-14), and `utils/drop_loaded_table.py` removes one.
+- **Weather for the 8 cities (EXP-14):** one request fetches daily historical weather from Open-Meteo for every city in the ride data, turns it into one row per city per day, and prepares it as `external.weather_daily` for your approval (see [Load the weather data](#6-load-the-weather-data-optional)).
 
 ### Sample dataset
 
@@ -214,7 +216,8 @@ copy .env.example .env      # Windows
 | `ANTHROPIC_API_KEY` | All agents |
 | `DB_HOST`, `DB_PORT`, `DB_NAME` | Database connection |
 | `DB_READER_USER`, `DB_READER_PASSWORD` | The agent (read-only user) |
-| Lowercase `host`, `port`, `database`, `user`, `password` | Only `utils/feed_db.py` (admin user, to load data) |
+| `DB_WRITER_USER`, `DB_WRITER_PASSWORD` | Approved loads only (`etl_writer`, can write only to the `external` schema) |
+| Lowercase `host`, `port`, `database`, `user`, `password` | Only `utils/feed_db.py` and `utils/setup_load_access.py` (admin user, setup) |
 
 `.env` is in `.gitignore`. Never commit it.
 
@@ -222,6 +225,12 @@ copy .env.example .env      # Windows
 
 ```bash
 uv run utils/feed_db.py
+```
+
+To let the ETL agent load files into the database (EXP-13), also run this once. It creates the `external` schema and the `etl_writer` user, which can write only there:
+
+```bash
+uv run python utils/setup_load_access.py
 ```
 
 ### 5. Ask questions
@@ -261,7 +270,17 @@ print(reply.standalone_question)  # how the follow-up was understood
 - "How many cancelled rides were there for each cancellation reason?"
 - "What is the total revenue from completed payments by payment method?"
 - "Extract the data from https://pokeapi.co/api/v2/pokemon and save it to data/extract as CSV."
-- "Read data/extract/extracted_data.csv, keep only names starting with 'c', and save it to data/transform as CSV."
+- "Read data/extract/pokemon.csv, keep only names starting with 'c', and save it to data/transform as CSV." (The extract tool names each file after its source and follows the API's "next" links, up to 50 pages.)
+
+### 6. Load the weather data (optional)
+
+The weather questions (`--set weather`) and weather-and-rides answers need daily weather for the 8 cities in `external.weather_daily`. In the app, send this request (one line; it's also `LIVE_WEATHER_URL` in `evals/etl_tasks.py`):
+
+```text
+https://archive-api.open-meteo.com/v1/archive?latitude=43.65,45.50,45.42,53.55,44.65,49.28,49.90,51.05&longitude=-79.38,-73.57,-75.70,-113.49,-63.57,-123.12,-97.14,-114.07&start_date=2025-01-01&end_date=2026-07-30&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,snowfall_sum,wind_speed_10m_max&timezone=auto has daily weather for the 8 cities in our ride data: 43.65,-79.38 is Toronto, 45.50,-73.57 is Montreal, 45.42,-75.70 is Ottawa, 53.55,-113.49 is Edmonton, 44.65,-63.57 is Halifax, 49.28,-123.12 is Vancouver, 49.90,-97.14 is Winnipeg, 51.05,-114.07 is Calgary. Keep one row per city per day with exactly these columns: city (the city name), date, temp_max_c, temp_min_c, precipitation_mm, snowfall_cm, wind_max_kmh. Then load it into the database as a table called weather_daily.
+```
+
+The ETL agent downloads 576 days for each city from [Open-Meteo](https://open-meteo.com/) (free, no API key, CC BY 4.0), shapes it into one row per city per day (4,608 rows) and prepares the load. Check the card (8 cities, `date` as a date) and click **Approve load**.
 
 Something not working? See [docs/troubleshooting.md](docs/troubleshooting.md).
 
@@ -276,7 +295,7 @@ The original version relied on one LLM check and ran AI-written code directly. E
 | Harmful SQL (DELETE, DROP, ...) | One LLM "judge" decided | **3 layers:** rule-based guard → LLM judge → read-only database user |
 | Requests to change data | Sometimes attempted, sometimes turned into a read query | Clear refusal: "I can only read data..." |
 | Runaway queries | No limit | 15-second statement timeout |
-| AI-generated pandas code | `exec()` inside the app | Separate process, 60-second limit, no API keys or passwords |
+| AI-generated pandas code | `exec()` inside the app | **Code guard** ([EXP-12](docs/experiments-etl.md#exp-12-part-1--code-guard-for-generated-pandas-code)): checked before running, then run in a separate process that can only write inside `data/`, can't read `.env`, use the network or start programs, with a 60-second limit |
 | File access by ETL tools | Any path | Only inside `data/` |
 | Personal data sent to the LLM | Sample rows with emails and phones | Emails and phone numbers hidden |
 | Secrets | `.env` | `.env` (git-ignored) plus `.env.example` template |
@@ -290,8 +309,19 @@ In the evaluations, none of the 7 unsafe requests (delete, update, drop, create 
 
 The guard fails closed: anything it can't parse, including a prose reply instead of SQL, is blocked.
 
-### ETL: isolation, not a full sandbox
-Generated code runs in a separate Python process, so it can't crash or freeze the app and can't read your secrets. It can still read and write files your user account can access; running it in a container is on the [roadmap](#8-roadmap).
+### ETL: loading only with a person's approval
+Loading data is split into two steps that can't be merged (`utils/loads.py`):
+1. **Prepare** (the agent's `prepare_load_tool`): checks the file and plans the load, writes nothing.
+2. **Approve** (people only: the app's Approve button): re-checks that the file is unchanged since the preview, then writes it in one transaction as `etl_writer`.
+
+The ETL agent has no tool that approves, so no request ("approve it yourself") can make it load data. The database enforces the rest: `etl_writer` can create and fill tables only in the `external` schema and can't touch the ride-sharing tables, and the agent's read-only user can read `external` but not write to it. Pending loads are stored outside `data/`, so generated code can't change a plan after the preview.
+
+### ETL: a code guard, not yet a container
+The pandas code Claude writes goes through two checks (`utils/code_guard.py`):
+1. **Before running:** its syntax tree is checked. Imports outside a short list (pandas, numpy, json, re, datetime, ...) and calls like `eval`, `exec`, `os.system` or `os.environ` are rejected with a message the agent can use to rewrite the code.
+2. **While running:** the code runs in a separate, time-limited process with a Python audit hook that sees every file open, network connection and program start. It can write only inside `data/`, read only `data/` and Python's own libraries (so not `.env`), and can't use the network or start other programs. Each layer was tested on its own: the runtime check alone stops all 9 attempts to get around the static one.
+
+Until EXP-12 the code could write anywhere, use the network, start programs and read the `.env` file; the safety-layer tests in `evals/etl_tasks.py` found this without involving the model. It's a guard, not a container: running generated code in a container is still on the [roadmap](#8-roadmap).
 
 ---
 
@@ -325,9 +355,13 @@ uv run evals/run_eval.py --ids s01 t01       # specific questions
 uv run evals/run_eval.py --no-judge          # skip the LLM judge (cheaper)
 uv run evals/run_eval.py --set holdout       # held-out questions (see below)
 uv run evals/run_eval.py --set holdout2      # second held-out set (see below)
+uv run evals/run_eval.py --set weather       # weather + rides questions (needs external.weather_daily)
 uv run evals/run_followup_eval.py            # follow-up conversations (see below)
 uv run evals/run_followup_eval.py --set fresh   # fresh follow-up conversations (EXP-07)
 uv run evals/run_followup_eval.py --set check   # final check conversations (EXP-07)
+uv run evals/run_etl_eval.py                 # ETL Analyst: 33 tasks + 26 tests without the model
+uv run evals/run_etl_eval.py --group hard    # one group: basic, hard, layer, tool, db, load or weather
+uv run evals/run_etl_eval.py --live          # ... plus two tasks against the real Open-Meteo API
 ```
 
 Each run writes a Markdown report (summary, per-question results, and every failure with its generated SQL) and a JSON file to `evals/results/`.
@@ -339,6 +373,12 @@ In EXP-07 one held-out question (o14) showed the same weakness as a follow-up co
 
 ### Follow-up conversations
 `evals/followup_questions.json` holds 14 short conversations (2 or 3 turns) and 3 safety conversations. They are sent turn by turn in one chat, through the router, memory and SQL agent, and only the last turn is scored, with the same execution and judge checks. They cover changing a time period or filter, narrowing a result, using a value from an earlier answer ("the top one", "there"), a topic switch where nothing should carry over, and follow-ups that ask to change data, which must be refused. The report shows how each follow-up was understood. `evals/followup_fresh_questions.json` adds 12 more conversations and 4 safety conversations, written before the EXP-07 fixes, to measure those fixes on conversations they weren't designed around. `evals/followup_check_questions.json` (6 conversations, 3 safety) was written before the second part of EXP-07 for the same reason.
+
+### ETL tasks
+`evals/etl_tasks.py` holds 27 tasks for the ETL Analyst (5 extract, 9 transform and 3 safety requests, plus 10 harder pipeline tasks such as pagination, joins, messy values and upserts), each with a short pandas reference that produces the correct output, and 10 safety-layer tests that push harmful code straight through the tools without the model (plus one control test that normal code still runs), and 6 tool tests that call the extract tool directly (pagination, Open-Meteo's layout, several locations, which requested point each location answers, file names). Since EXP-14 the output is also compared row by row, so a table with the right values on the wrong rows (one city's weather under another city's name) fails. The runner serves the test data from a local web server, sends each request to the ETL agent, and compares the file it writes with the reference: row count, expected columns and their values. See [docs/experiments-etl.md](docs/experiments-etl.md).
+
+### Weather questions
+`evals/weather_questions.json` (12 SQL, 2 safety, 3 routing) asks about the loaded weather on its own ("On how many days in 2025 did it snow in Winnipeg?") and joined with rides ("How many rides did Toronto riders request on days when it snowed in Toronto?"). Rides have no city column, so a ride's city is its rider's city, and every question says so. The set was written before the SQL agent could see any weather data, under the held-out rule.
 
 ### Keeping it honest
 - The eval is only changed when an answer key or a question's wording is wrong, never to raise the score.
@@ -369,11 +409,28 @@ In EXP-07 one held-out question (o14) showed the same weakness as a follow-up co
 | v2.5 | Round 8: result sanity check (main set) | **100%²** | **100%** | 4,671 (**1,815 billed**) | 6.2 s |
 | v2.5 | Same version, held-out set | **100%** | **100%** | 4,562 (**1,765 billed**) | 5.8 s |
 | v2.5 | Same version, **second held-out set** (20 questions written after the last change) | **100%** | **100%** | 4,544 (**1,925 billed**) | 6.0 s |
+| v2.6 | EXP-14: reads loaded tables; **weather + rides set** (12 questions written before the agent saw the data; 0/12 before) | **91.7%** (11/12)³ | 91.7% | 5,122 (2,299 billed) | 6.6 s |
+| v2.6 | Same version, main set (regression check) | **100%** | **100%** | 5,104 (**1,878 billed**) | 5.9 s |
 
 ¹ The one miss is h06, the same occasional mistake seen before caching; see [EXP-08](docs/experiments.md#exp-08--prompt-caching). Billed input = uncached input + 0.1 × cache reads + 1.25 × cache writes.
 ² h06 still writes the wrong-shape query sometimes (2 of 6 runs in this round), but the sanity check now catches it and the rewritten query is correct; h06 passed 5/5 when run alone. See [EXP-09](docs/experiments.md#exp-09--result-sanity-check).
+³ 10/12 as first scored: wq06 was right but returned a midnight timestamp with a time zone, which the scorer now accepts. The miss, wq12, totalled completed payments by drop-off date instead of ride fares by request date.
 
 Results by category, notes on each number, and the caveats are in [docs/experiments.md](docs/experiments.md#results-by-version); every round has its own write-up there.
+
+**ETL Analyst** (`uv run evals/run_etl_eval.py`; details in [docs/experiments-etl.md](docs/experiments-etl.md))
+
+| Version | Changes | Tasks passed (27 + live) | Safety layers | Tool tests | Pipeline tool calls / time |
+|---|---|:---:|:---:|:---:|:---:|
+| EXP-11 | Evaluation and baseline, agent unchanged | 28/28¹ | 4/9 | – | 2.4 calls, 17.1 s |
+| EXP-12 part 1 | Code guard for generated pandas code | 26/27 | **10/10** | 0/5 | – |
+| EXP-12 part 2 | Smarter extract tool: pagination, Open-Meteo layout, file names | 27/28 | **10/10** | **5/5** | h03 1 call (was failing), weather 1 call (was 3) |
+| EXP-13 | Loading into PostgreSQL with a person's approval | 31/31² | 10/10 | 5/5 | database checks **10/10** (was 4/10); load tasks **4/4** |
+| EXP-14 | Weather for the 8 cities; output compared row by row; tools report the files really written | 34/35⁴ | 10/10 | **6/6** (was 5/6) | real load approved, 4,608 rows; live 8-city task 4,608/4,608 rows |
+
+¹ The 18 basic and live tasks and the 10 pipeline tasks, run separately; one pipeline result was a scorer bug (−0.0 vs 0.0), fixed and re-scored.
+² The 27 earlier tasks plus the 4 new load tasks, in one run without the live task (all 56 tasks, including the tests without a model: 56/56).
+⁴ The 27 earlier tasks, 4 load tasks, 2 weather tasks and 2 live tasks in one run (60/61 with the 26 tests without a model). The miss, w01, had the right content but saved it one folder up (`output/w01.csv`).
 
 ---
 
@@ -383,6 +440,10 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - [x] Read-only database user with a query timeout
 - [x] Rule-based SQL validation before the LLM judge
 - [x] Isolated, time-limited execution for generated ETL code
+- [x] Code guard for generated ETL code: static check plus runtime limits (EXP-12)
+- [x] Load data into PostgreSQL only after a person approves it, as a user that can write only to its own schema (EXP-13)
+- [x] Daily weather for the 8 cities in one request, each location tied to the point it was asked for (EXP-14 part 1)
+- [x] SQL agent answers questions that join loaded weather with rides: 11/12, was 0/12 (EXP-14 part 2)
 - [x] Personal columns hidden from the LLM
 - [ ] Run generated ETL code in a container
 - [x] Clear refusals for vague follow-up change requests ("remove those drivers")
@@ -411,7 +472,6 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - [x] Streamlit chat interface with the answer, generated SQL and result table
 - [x] Saved chat history in the sidebar, with New chat and delete
 - [x] Automatic charts for query results
-- [ ] Load transformed data into PostgreSQL with human approval
 - [ ] Pagination and authentication for API extraction
 
 ---
@@ -421,7 +481,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - **Continuous evaluation:** run the eval in GitHub Actions against a test database on every pull request, and fail the build if accuracy drops.
 - **Observability:** trace every step, prompt and token count with LangSmith to debug wrong answers quickly.
 - **Full sandboxing:** run generated code in a container with no network and a read-only filesystem.
-- **Human-in-the-loop:** use LangGraph interrupts so a person approves any action that writes data.
+- **More approval-gated actions:** loads already need a person's approval (EXP-13); the same prepare-then-approve pattern could cover other actions that change data.
 - **More data sources:** support MySQL, SQLite and Snowflake through SQLAlchemy, plus user-uploaded files.
 
 **Current limitations**
@@ -451,6 +511,10 @@ AI-Data-Agent/
 │   ├── charts.py            # Picks a chart (metric, bar, line or none) for a result
 │   ├── usage.py             # Token usage, cache reads/writes and billed input tokens
 │   ├── result_checks.py     # Sanity check: does a successful result fit the question?
+│   ├── code_guard.py        # Checks and limits for the pandas code the ETL agent writes
+│   ├── loads.py             # Prepare a load (agent) and approve it (people only)
+│   ├── setup_load_access.py # One-time setup: external schema and the etl_writer user
+│   ├── drop_loaded_table.py # Remove a loaded table from the external schema (asks to confirm)
 │   ├── chat_store.py        # Saved chats for the app (SQLite)
 │   ├── etl_tools.py         # API extraction, file reading, isolated code execution
 │   ├── feed_db.py           # Creates tables and loads the dataset
@@ -459,14 +523,20 @@ AI-Data-Agent/
 │   ├── questions.json       # Evaluation questions with reference SQL
 │   ├── holdout_questions.json  # Held-out questions, never used to design fixes
 │   ├── holdout2_questions.json # Second held-out set, written 2026-10-14
+│   ├── weather_questions.json  # Weather + rides questions, written before the agent saw the data (EXP-14)
 │   ├── followup_questions.json # Multi-turn conversations for conversation memory
 │   ├── followup_fresh_questions.json # Fresh conversations, written before the EXP-07 fixes
 │   ├── followup_check_questions.json # Final check conversations for EXP-07 part 2
 │   ├── run_followup_eval.py # Scores follow-up conversations
 │   ├── run_eval.py          # Scores the agent and writes reports
+│   ├── etl_tasks.py         # ETL tasks with pandas reference outputs
+│   ├── run_etl_eval.py      # Scores the ETL agent's output files
+│   ├── etl_fixtures/        # Small test files and API responses for the ETL tasks
+│   ├── load_checks.py       # Database-layer checks for loading (no model)
 │   └── results/             # Reports from each run
 ├── docs/
-│   ├── experiments.md       # Experiment log: changes, hypotheses, results
+│   ├── experiments.md       # Experiment log: every experiment, SQL details
+│   ├── experiments-etl.md   # ETL Analyst experiments (EXP-11 onwards)
 │   ├── troubleshooting.md   # Common errors and fixes
 │   └── demo.gif             # Demo of the chat app
 ├── data/                    # Dataset and ETL outputs

@@ -28,8 +28,9 @@ class RouterSchema(BaseModel):
     answer: Literal["sql","etl"] = Field(..., description=(
         "'sql' for anything about the records in the ride-sharing database (users, drivers, vehicles, "
         "rides, payments, ratings): questions about the data, and also requests to add, change or delete "
-        "those records, which the SQL agent refuses. 'etl' only for extracting data from a web API or "
-        "transforming files in the data/ folder."))
+        "those records, which the SQL agent refuses. 'etl' only for extracting data from a web API, "
+        "transforming files in the data/ folder, or loading such a file into a new database table "
+        "(which a person then approves)."))
     comments: str = Field(..., description="Additional comments or feedback regarding the classification of the user's question")
 
 class DataAgentSchema(BaseModel):

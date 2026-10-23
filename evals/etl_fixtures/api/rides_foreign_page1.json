@@ -1,0 +1,20 @@
+{
+ "next": "http://other-host.invalid/api/rides_page2.json",
+ "results": [
+  {
+   "ride_id": 6001,
+   "city": "Toronto",
+   "fare": 12.5
+  },
+  {
+   "ride_id": 6002,
+   "city": "Ottawa",
+   "fare": 30.0
+  },
+  {
+   "ride_id": 6003,
+   "city": "Toronto",
+   "fare": 8.75
+  }
+ ]
+}

@@ -11,6 +11,9 @@ specific questions, so improvements generalise beyond the evaluation set.
 
 AGENT_TABLES = ["users", "vehicles", "rides", "payments", "ratings"]
 
+# Tables a person approved loading (EXP-13) live here; the agent sees all of them (EXP-14)
+EXTERNAL_SCHEMA = "external"
+
 DATA_NOTES = """
 - users holds both riders and drivers; user_type is 'rider' or 'driver'. A driver is a
   user with user_type = 'driver'. city and province are where the user is based.
