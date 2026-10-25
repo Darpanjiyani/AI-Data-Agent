@@ -96,11 +96,19 @@ def router_node(state: DataAgentSchema):
 def etl_node(state: DataAgentSchema):
 
     question = state.messages[-1].content
+    turn = dict(state.turn)
+
+    # Public demo: the ETL agent is switched off, so no tool can download, write or load anything
+    from utils.demo import ETL_OFF_MESSAGE, demo_mode
+    if demo_mode():
+        turn.update({"answer": ETL_OFF_MESSAGE, "steps": list(turn.get("steps", [])) + ["ETL agent is off in the demo"],
+                     "etl_actions": [], "standalone_question": question, "pending_loads": []})
+        return {"messages": [AIMessage(content=ETL_OFF_MESSAGE)], "turn": turn}
+
     history = format_history(state.messages)
     request = question if not history else f"Conversation so far:\n{history}\n\nNew request: {question}"
 
     write = get_stream_writer()
-    turn = dict(state.turn)
     steps, actions, calls, last_message = list(turn.get("steps", [])), [], {}, None
 
     for update in etl_analyst.stream({"messages": [HumanMessage(content=request)]}, stream_mode="updates"):

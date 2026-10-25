@@ -80,7 +80,15 @@ def main() -> None:
     ]
     with admin.cursor() as cursor:
         for label, statement in steps:
-            cursor.execute(statement)
+            try:
+                cursor.execute(statement)
+            except psycopg2.Error as error:
+                # Hosted databases (e.g. Neon) may not let the admin set another user's default
+                # privileges. That step is optional: every approved load grants read access itself.
+                if "DEFAULT PRIVILEGES" not in statement.as_string(cursor):
+                    raise
+                print(f"--  {label}: skipped ({str(error).strip().splitlines()[0]}); each load grants it instead")
+                continue
             if label:
                 print(f"OK  {label}")
     admin.close()
