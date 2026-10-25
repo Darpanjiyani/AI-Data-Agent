@@ -7,6 +7,7 @@ Run from the project root:
 
 import json
 import os
+import uuid
 from pathlib import Path
 
 import pandas as pd
@@ -16,7 +17,16 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(PROJECT_ROOT / ".env")
 
-from utils import chat_store  # noqa: E402
+# On Streamlit Community Cloud the settings come from the app's Secrets instead of a .env file.
+# They're copied into the environment before anything reads it (a local .env still wins).
+try:
+    for _name, _value in st.secrets.items():
+        if isinstance(_value, (str, int, float, bool)):
+            os.environ.setdefault(_name, str(_value))
+except Exception:   # no secrets configured (running locally)
+    pass
+
+from utils import chat_store, demo  # noqa: E402
 from utils.charts import build_chart, plan_chart, pretty, to_dataframe  # noqa: E402
 
 # The agent keeps its memory of each chat in the same file as the saved chats, so a chat
@@ -32,6 +42,16 @@ EXAMPLES = [
     "Who are our top 3 spenders?",
     "What share of payments failed?",
     "What's the average fare of a completed ride?",
+    "Delete all cancelled rides.",
+]
+
+# The public demo also shows off the weather data loaded in EXP-14
+DEMO_EXAMPLES = [
+    "How many rides are in each status?",
+    "How many rides per month in 2025?",
+    "Which city got the most snow in 2025?",
+    "Were Toronto riders more likely to cancel on snowy days?",
+    "Who are our top 3 spenders?",
     "Delete all cancelled rides.",
 ]
 
@@ -214,13 +234,17 @@ def render_reply(reply, key: str) -> None:
 
 # ------------------------------------------------------------------ chats
 
-# Run locally, every chat belongs to "local". A public demo would pass a per-browser id,
-# so visitors only ever see their own chats.
-VISITOR_ID = "local"
+# Run locally, every chat belongs to "local". In the public demo each browser session gets its
+# own id, so visitors only ever see their own chats.
+DEMO = demo.demo_mode()
+st.session_state.setdefault("visitor_id", f"visitor-{uuid.uuid4().hex}" if DEMO else "local")
+VISITOR_ID = st.session_state.visitor_id
 
 chat_store.setup()
 st.session_state.setdefault("chat_id", None)      # the open chat; None = a new, empty chat
 st.session_state.setdefault("awaiting", None)     # a question sent but not answered yet
+st.session_state.setdefault("asked", 0)           # questions this session (demo limit)
+st.session_state.setdefault("limit_note", None)   # why the last question wasn't sent (demo)
 
 
 def open_chat(chat_id) -> None:
@@ -230,6 +254,19 @@ def open_chat(chat_id) -> None:
 
 def send(question: str) -> None:
     """Start a chat if needed, then answer on the next run (so the sidebar already lists it)."""
+    st.session_state.limit_note = None
+    if DEMO:   # public demo: per-visitor and per-day limits keep the API bill bounded
+        if st.session_state.asked >= demo.per_session_limit():
+            st.session_state.limit_note = (
+                f"You've asked {demo.per_session_limit()} questions, the limit for one visit to this demo. "
+                "Thanks for trying it! To keep going, run the project yourself (see the GitHub README).")
+            return
+        if not demo.take_daily_slot():
+            st.session_state.limit_note = (
+                "The demo has reached today's question limit for all visitors. Please try again tomorrow, "
+                "or run the project yourself (see the GitHub README).")
+            return
+        st.session_state.asked += 1
     if st.session_state.chat_id is None:
         st.session_state.chat_id = chat_store.create_chat(VISITOR_ID, question)
     st.session_state.awaiting = question
@@ -256,6 +293,9 @@ st.markdown(SIDEBAR_CSS, unsafe_allow_html=True)
 with st.sidebar:
     st.title("🤖 AI Data Agent")
     st.caption("Ask questions about the ride-sharing database in plain English.")
+    if DEMO:
+        left = max(demo.per_session_limit() - st.session_state.asked, 0)
+        st.caption(f"Public demo · read-only · {left} question{'s' if left != 1 else ''} left in this visit")
 
     st.button("New chat", icon=":material/edit_square:", width="stretch", type="primary",
               on_click=open_chat, args=(None,), disabled=st.session_state.chat_id is None)
@@ -277,6 +317,7 @@ with st.sidebar:
             "- Connects as a **read-only** database user\n"
             "- Every query passes a rule-based SQL check and an AI safety review\n"
             "- Requests to change data are refused, not run"
+            + ("\n- In this demo, fetching and loading data is switched off" if DEMO else "")
         )
     if st.session_state.chat_id is not None and st.session_state.awaiting is None:
         if st.button("Delete this chat", icon=":material/delete:", width="stretch"):
@@ -295,7 +336,7 @@ with st.sidebar:
 missing = missing_settings()
 if missing:
     st.error(
-        "The app needs these settings in your `.env` file: "
+        "The app needs these settings (in your `.env` file, or in the app's Secrets on Streamlit Cloud): "
         + ", ".join(f"`{name}`" for name in missing)
         + ". See `.env.example` and the Getting Started section of the README.",
         icon=":material/settings:",
@@ -307,14 +348,23 @@ history = load_history(chat_id)
 
 if not history and st.session_state.awaiting is None:
     st.markdown("### What would you like to know?")
-    st.markdown(
-        "Ask about **users, drivers, vehicles, rides, payments or ratings**. You'll see the "
-        "answer, a chart when one fits, the data and the exact SQL that was run. "
-        "Follow-ups work too: try \"And in 2026?\" after a question."
-    )
+    if DEMO:
+        st.markdown(
+            "Ask about **users, drivers, vehicles, rides, payments, ratings** and the **daily weather** in the "
+            "8 cities. You'll see the answer, a chart when one fits, the data and the exact SQL that was run. "
+            "Follow-ups work too: try \"And in 2026?\" after a question."
+        )
+        st.caption("The ride data is synthetic, made up for this project; the weather is real, from Open-Meteo. "
+                   "This public demo can only read data.")
+    else:
+        st.markdown(
+            "Ask about **users, drivers, vehicles, rides, payments or ratings**. You'll see the "
+            "answer, a chart when one fits, the data and the exact SQL that was run. "
+            "Follow-ups work too: try \"And in 2026?\" after a question."
+        )
     st.caption("Try one of these")
     columns = st.columns(2)
-    for number, example in enumerate(EXAMPLES):
+    for number, example in enumerate(DEMO_EXAMPLES if DEMO else EXAMPLES):
         columns[number % 2].button(example, key=f"example_{number}", width="stretch",
                                    on_click=send, args=(example,))
 
@@ -325,8 +375,11 @@ for index, item in enumerate(history):
         else:
             render_reply(item["reply"], f"{chat_id}_{index}")
 
-question = st.chat_input("Ask a question about the data...",
-                         disabled=st.session_state.awaiting is not None)
+if st.session_state.limit_note:
+    st.info(st.session_state.limit_note, icon=":material/hourglass_top:")
+
+question = st.chat_input("Ask a question about the data...", disabled=st.session_state.awaiting is not None,
+                         max_chars=demo.MAX_QUESTION_CHARS if DEMO else None)
 if question:
     send(question)
     st.rerun()

@@ -277,6 +277,12 @@ def approve_load(load_id: str) -> dict:
                 cursor.execute(sql.SQL("CREATE TABLE {} ({})").format(table, definition))
             insert = sql.SQL("INSERT INTO {} ({}) VALUES %s").format(table, sql.SQL(", ").join(names))
             execute_values(cursor, insert.as_string(cursor), rows, page_size=1000)
+            # The read-only user can read the new table. setup_load_access.py also sets this up as a
+            # default, but some hosted databases (e.g. Neon) don't allow that, so each load grants it too.
+            reader = os.getenv("DB_READER_USER", "agent_reader")
+            cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (reader,))
+            if cursor.fetchone():
+                cursor.execute(sql.SQL("GRANT SELECT ON {} TO {}").format(table, sql.Identifier(reader)))
     except Exception as error:
         load.update(status="failed", result=f"The load failed and nothing was changed: {str(error).strip()[:200]}")
         _save(load)

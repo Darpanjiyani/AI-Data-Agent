@@ -2,11 +2,13 @@
 
 Ask questions about your data in plain English, and let a team of AI agents answer them safely.
 
+**Live demo:** *coming soon*, a read-only version anyone can try. How it's deployed: [docs/live-demo.md](docs/live-demo.md).
+
 ![Python](https://img.shields.io/badge/Python-3.11+-blue) ![LangGraph](https://img.shields.io/badge/LangGraph-multi--agent-purple) ![Claude](https://img.shields.io/badge/LLM-Claude-orange) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-read--only-336791)
 
 | Execution accuracy (47 questions, avg of 3 runs) | Held-out sets (2 × 20 unseen questions) | Follow-up conversations (32) | Change requests executed |
 |:---:|:---:|:---:|:---:|
-| **89.4% → 99.3%** | **100%** | **100%** | **0 / 17**, all clearly refused |
+| **89.4% → 99.3%** | **100%** | **100%** | **0 / 22**, all clearly refused |
 
 ![Demo: a question answered with a chart, a follow-up about "the top one" understood as Montreal, then a vague delete request refused](docs/demo.gif)
 
@@ -116,6 +118,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 - **Automatic charts:** a single number becomes a headline metric, a breakdown becomes a bar chart (in the query's order), and a time series becomes a line chart. Lists of records stay as a table. When a result has several numbers (e.g. total rides and cancellation rate), you can choose which one to chart.
 - The result table and the exact SQL behind every answer, so answers can be checked.
 - Time and token usage for each answer, and example questions on the start screen of a new chat.
+- **Demo mode** (`DEMO_MODE=1`) for the public version: SQL Analyst only (the ETL agent is switched off), separate chats for each visitor, question limits per visit and per day, and examples that include the weather data. See [docs/live-demo.md](docs/live-demo.md).
 
 ### SQL Analyst
 - Converts natural-language questions into PostgreSQL.
@@ -471,6 +474,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 **Features**
 - [x] Streamlit chat interface with the answer, generated SQL and result table
 - [x] Saved chat history in the sidebar, with New chat and delete
+- [ ] Public live demo: Streamlit Community Cloud + Neon, demo mode with limits (in progress)
 - [x] Automatic charts for query results
 - [ ] Pagination and authentication for API extraction
 
@@ -515,6 +519,10 @@ AI-Data-Agent/
 │   ├── loads.py             # Prepare a load (agent) and approve it (people only)
 │   ├── setup_load_access.py # One-time setup: external schema and the etl_writer user
 │   ├── drop_loaded_table.py # Remove a loaded table from the external schema (asks to confirm)
+│   ├── demo.py              # Demo mode: ETL off, per-visitor and per-day question limits
+│   ├── setup_reader.py      # Creates the read-only agent_reader (used for the cloud database)
+│   ├── export_table.py      # Saves a table to CSV (copies the weather data to the demo database)
+│   ├── load_file.py         # Loads a file into the external schema from the terminal, after you type yes
 │   ├── chat_store.py        # Saved chats for the app (SQLite)
 │   ├── etl_tools.py         # API extraction, file reading, isolated code execution
 │   ├── feed_db.py           # Creates tables and loads the dataset
@@ -538,6 +546,7 @@ AI-Data-Agent/
 │   ├── experiments.md       # Experiment log: every experiment, SQL details
 │   ├── experiments-etl.md   # ETL Analyst experiments (EXP-11 onwards)
 │   ├── troubleshooting.md   # Common errors and fixes
+│   ├── live-demo.md         # How the public demo is deployed (Streamlit Community Cloud + Neon)
 │   └── demo.gif             # Demo of the chat app
 ├── data/                    # Dataset and ETL outputs
 ├── app.py                   # Streamlit chat app

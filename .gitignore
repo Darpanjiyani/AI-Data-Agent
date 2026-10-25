@@ -19,3 +19,8 @@ etl_escape_test/
 
 # Pending data loads waiting for a person to approve them (EXP-13)
 agent_state/
+
+# Public demo (live-demo): cloud database settings, Streamlit secrets, the exported weather file
+.env.cloud
+.streamlit/secrets.toml
+data/demo/
