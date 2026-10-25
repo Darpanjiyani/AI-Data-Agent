@@ -1,5 +1,7 @@
 # Live demo: deploying the app
 
+The demo is live at **https://ai-data-agent-darpan.streamlit.app/**.
+
 How the public demo is set up: the Streamlit app on **Streamlit Community Cloud**, a copy of the database on **Neon** (free Postgres), and **demo mode** switched on so strangers can ask questions safely and the API bill stays bounded.
 
 ## What demo mode changes

@@ -2,7 +2,7 @@
 
 Ask questions about your data in plain English, and let a team of AI agents answer them safely.
 
-**Live demo:** *coming soon*, a read-only version anyone can try. How it's deployed: [docs/live-demo.md](docs/live-demo.md).
+**[Try the live demo](https://ai-data-agent-darpan.streamlit.app/)**: a read-only version anyone can use, no setup needed. It answers questions about the ride data and the daily weather; the ETL agent is switched off. How it's deployed: [docs/live-demo.md](docs/live-demo.md).
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue) ![LangGraph](https://img.shields.io/badge/LangGraph-multi--agent-purple) ![Claude](https://img.shields.io/badge/LLM-Claude-orange) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-read--only-336791)
 
@@ -474,7 +474,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 **Features**
 - [x] Streamlit chat interface with the answer, generated SQL and result table
 - [x] Saved chat history in the sidebar, with New chat and delete
-- [ ] Public live demo: Streamlit Community Cloud + Neon, demo mode with limits (in progress)
+- [x] Public [live demo](https://ai-data-agent-darpan.streamlit.app/): Streamlit Community Cloud + Neon, demo mode with limits
 - [x] Automatic charts for query results
 - [ ] Pagination and authentication for API extraction
 
