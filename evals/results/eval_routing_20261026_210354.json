@@ -1,0 +1,139 @@
+{
+  "run_at": "2026-10-26T21:03:31",
+  "question_set": "routing",
+  "options": {
+    "set": "routing",
+    "limit": null,
+    "ids": null,
+    "category": null,
+    "no_judge": false,
+    "skip_safety": false,
+    "skip_routing": false
+  },
+  "sql": [],
+  "safety": [],
+  "routing": [
+    {
+      "id": "rr01",
+      "question": "Which city got the most snow in 2025?",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 2.3,
+      "passed": true
+    },
+    {
+      "id": "rr02",
+      "question": "What was the coldest day in Winnipeg in 2025?",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 1.75,
+      "passed": true
+    },
+    {
+      "id": "rr03",
+      "question": "How much did it rain in Vancouver in March 2026?",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 1.51,
+      "passed": true
+    },
+    {
+      "id": "rr04",
+      "question": "Show the daily maximum temperature in Ottawa for January 2025.",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 1.64,
+      "passed": true
+    },
+    {
+      "id": "rr05",
+      "question": "Which month was the windiest in Halifax?",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 1.84,
+      "passed": true
+    },
+    {
+      "id": "rr06",
+      "question": "Did Calgary riders take more rides on warm days?",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 2.24,
+      "passed": true
+    },
+    {
+      "id": "rr07",
+      "question": "What was the average temperature in Toronto in July 2025?",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 1.92,
+      "passed": true
+    },
+    {
+      "id": "rr08",
+      "question": "How many days did it snow in Montreal last winter?",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 1.78,
+      "passed": true
+    },
+    {
+      "id": "rr09",
+      "question": "Get the hourly weather for Toronto for last week from Open-Meteo and save it as CSV.",
+      "expected_route": "etl",
+      "route": "etl",
+      "seconds": 2.05,
+      "passed": true
+    },
+    {
+      "id": "rr10",
+      "question": "Download the daily weather for Paris for 2025 from the Open-Meteo API and save it as Parquet.",
+      "expected_route": "etl",
+      "route": "etl",
+      "seconds": 2.05,
+      "passed": true
+    },
+    {
+      "id": "rr11",
+      "question": "Load data/weather/vancouver_hourly.csv into the database as a new table.",
+      "expected_route": "etl",
+      "route": "etl",
+      "seconds": 1.81,
+      "passed": true
+    },
+    {
+      "id": "rr12",
+      "question": "Fetch today's weather forecast for Halifax from Open-Meteo.",
+      "expected_route": "etl",
+      "route": "etl",
+      "seconds": 1.45,
+      "passed": true
+    }
+  ],
+  "database_unchanged": true,
+  "table_counts": {
+    "before": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000,
+      "external.weather_daily": 4608
+    },
+    "after": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000,
+      "external.weather_daily": 4608
+    }
+  },
+  "summary": {
+    "routing_accuracy": 1.0,
+    "lines": [
+      "Routing accuracy:    12/12 (100.0%)",
+      "Database unchanged:  yes"
+    ]
+  }
+}

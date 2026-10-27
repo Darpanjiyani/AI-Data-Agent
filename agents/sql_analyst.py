@@ -49,6 +49,32 @@ def get_schema_context() -> str:
                         "as listed (external.<table>).\n" + loaded)
     return schema_info
 
+@lru_cache(maxsize=1)
+def get_loaded_tables() -> str:
+    """
+    One line per table in the external schema, with its columns, for the router, e.g.
+    "external.weather_daily (city, date, temp_max_c, ...)". Empty if there are none (or the
+    database can't be reached). The router needs it to know that, say, weather questions are
+    about data already in the database, not something to fetch from an API.
+    """
+    from psycopg2 import connect
+    try:
+        connection = connect(**reader_connection_details())
+    except Exception:
+        get_loaded_tables.cache_clear()
+        return ""
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT table_name, string_agg(column_name, ', ' ORDER BY ordinal_position) "
+                           "FROM information_schema.columns WHERE table_schema = %s "
+                           "GROUP BY table_name ORDER BY table_name", (EXTERNAL_SCHEMA,))
+            return "\n".join(f"- {EXTERNAL_SCHEMA}.{table} ({columns})" for table, columns in cursor.fetchall())
+    except Exception:
+        get_loaded_tables.cache_clear()
+        return ""
+    finally:
+        connection.close()
+
 # ---------------------------- AI Agent Code -----------------------------------------------
 
 def curate_ques(state: AgentSchema) -> AgentSchema:

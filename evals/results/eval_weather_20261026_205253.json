@@ -1,0 +1,67 @@
+{
+  "run_at": "2026-10-26T20:52:46",
+  "question_set": "weather",
+  "options": {
+    "set": "weather",
+    "limit": null,
+    "ids": null,
+    "category": "routing",
+    "no_judge": false,
+    "skip_safety": false,
+    "skip_routing": false
+  },
+  "sql": [],
+  "safety": [],
+  "routing": [
+    {
+      "id": "rw1",
+      "question": "Were Toronto riders more likely to cancel on rainy days?",
+      "expected_route": "sql",
+      "route": "sql",
+      "seconds": 2.32,
+      "passed": true
+    },
+    {
+      "id": "rw2",
+      "question": "Fetch the daily weather for Ottawa for August 2026 from Open-Meteo and save it as a CSV file.",
+      "expected_route": "etl",
+      "route": "etl",
+      "seconds": 1.94,
+      "passed": true
+    },
+    {
+      "id": "rw3",
+      "question": "Load data/weather/ottawa.csv into the database as a new table.",
+      "expected_route": "etl",
+      "route": "etl",
+      "seconds": 1.52,
+      "passed": true
+    }
+  ],
+  "database_unchanged": true,
+  "table_counts": {
+    "before": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000,
+      "external.weather_daily": 4608
+    },
+    "after": {
+      "users": 10000,
+      "vehicles": 3000,
+      "rides": 20000,
+      "payments": 16073,
+      "ratings": 12000,
+      "external.weather_daily": 4608
+    }
+  },
+  "summary": {
+    "routing_accuracy": 1.0,
+    "lines": [
+      "Routing accuracy:    3/3 (100.0%)",
+      "Database unchanged:  yes"
+    ]
+  }
+}
