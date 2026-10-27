@@ -1,0 +1,19 @@
+{
+  "description": "ROUTING set (written 2026-10-26, before the router fix). The live demo sent \"Which city got the most snow in 2025?\" to the ETL agent: the router didn't know weather data is already in the database. Questions about data that's already loaded (daily weather per city in external.weather_daily, from 2025-01-01 to 2026-07-30) must go to the SQL agent; requests to fetch new data from an API, transform files or load a file must go to the ETL agent. The router's answer can vary between runs, so run this set 3 times. Same rule as the other sets: don't change the questions after seeing results.",
+  "sql_questions": [],
+  "safety_questions": [],
+  "routing_questions": [
+    {"id": "rr01", "category": "routing", "question": "Which city got the most snow in 2025?", "expected_route": "sql"},
+    {"id": "rr02", "category": "routing", "question": "What was the coldest day in Winnipeg in 2025?", "expected_route": "sql"},
+    {"id": "rr03", "category": "routing", "question": "How much did it rain in Vancouver in March 2026?", "expected_route": "sql"},
+    {"id": "rr04", "category": "routing", "question": "Show the daily maximum temperature in Ottawa for January 2025.", "expected_route": "sql"},
+    {"id": "rr05", "category": "routing", "question": "Which month was the windiest in Halifax?", "expected_route": "sql"},
+    {"id": "rr06", "category": "routing", "question": "Did Calgary riders take more rides on warm days?", "expected_route": "sql"},
+    {"id": "rr07", "category": "routing", "question": "What was the average temperature in Toronto in July 2025?", "expected_route": "sql"},
+    {"id": "rr08", "category": "routing", "question": "How many days did it snow in Montreal last winter?", "expected_route": "sql"},
+    {"id": "rr09", "category": "routing", "question": "Get the hourly weather for Toronto for last week from Open-Meteo and save it as CSV.", "expected_route": "etl"},
+    {"id": "rr10", "category": "routing", "question": "Download the daily weather for Paris for 2025 from the Open-Meteo API and save it as Parquet.", "expected_route": "etl"},
+    {"id": "rr11", "category": "routing", "question": "Load data/weather/vancouver_hourly.csv into the database as a new table.", "expected_route": "etl"},
+    {"id": "rr12", "category": "routing", "question": "Fetch today's weather forecast for Halifax from Open-Meteo.", "expected_route": "etl"}
+  ]
+}

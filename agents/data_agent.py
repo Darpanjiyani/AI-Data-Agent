@@ -12,7 +12,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.config import get_stream_writer
 from agents.etl_analyst import etl_analyst
-from agents.sql_analyst import sql_analyst
+from agents.sql_analyst import get_loaded_tables, sql_analyst
 
 
 llm = pick_llm("claude")
@@ -73,6 +73,13 @@ def route_question(question: str, history: str = "") -> str:
             "Classify the new message. Use the conversation only to understand what it refers to: a request "
             "to change, remove or update records shown in the conversation is about the database ('sql')."
         )
+    # Tables a person approved loading (e.g. daily weather): questions about them are database questions
+    loaded = get_loaded_tables()
+    if loaded:
+        prompt = (f"Besides the ride-sharing tables, the database already holds these loaded tables:\n{loaded}\n"
+                  "A question about data in any of these tables is 'sql'. It's 'etl' only when the person asks "
+                  "to fetch new data from a web API or URL, to transform a file, or to load a file.\n\n"
+                  f"Message to classify:\n{prompt}")
     return llm_router.invoke(prompt).model_dump()["answer"]
 
 

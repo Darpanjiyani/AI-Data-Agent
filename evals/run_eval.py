@@ -20,6 +20,7 @@ Usage (from the project root):
   uv run evals/run_eval.py --set holdout      # held-out questions (generalisation check)
   uv run evals/run_eval.py --set holdout2     # second held-out set, written 2026-10-14
   uv run evals/run_eval.py --set weather      # weather + rides questions (needs external.weather_daily)
+  uv run evals/run_eval.py --set routing      # routing only: loaded weather (sql) vs fetching new data (etl)
   uv run evals/run_eval.py --ids s01 j07      # specific questions
   uv run evals/run_eval.py --category join    # one category
   uv run evals/run_eval.py --no-judge         # skip the LLM judge (cheaper)
@@ -60,6 +61,8 @@ QUESTION_SETS = {
     "holdout2": PROJECT_ROOT / "evals" / "holdout2_questions.json",
     # Weather + rides questions (EXP-14), written before the SQL agent could see the weather table.
     "weather": PROJECT_ROOT / "evals" / "weather_questions.json",
+    # Routing only: weather questions about loaded data vs requests to fetch new data (router fix)
+    "routing": PROJECT_ROOT / "evals" / "routing_questions.json",
 }
 RESULTS_DIR = PROJECT_ROOT / "evals" / "results"
 TABLES_TO_WATCH = ["users", "vehicles", "rides", "payments", "ratings",
@@ -273,7 +276,7 @@ def pct(part, whole):
 def main():
     parser = argparse.ArgumentParser(description="Evaluate the AI Data Agent.")
     parser.add_argument("--set", choices=sorted(QUESTION_SETS), default="main",
-                        help="Which question set to run: main (default), holdout, holdout2 or weather.")
+                        help="Which question set to run: main (default), holdout, holdout2, weather or routing.")
     parser.add_argument("--limit", type=int, help="Only run the first N questions of each type.")
     parser.add_argument("--ids", nargs="+", help="Only run these question ids.")
     parser.add_argument("--category", help="Only run questions in this category (simple, aggregation, join, date, tricky, safety, routing).")

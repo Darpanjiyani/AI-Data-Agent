@@ -21,6 +21,7 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 | [EXP-13](experiments-etl.md#exp-13--loading-into-postgresql-with-a-persons-approval) | 2026-10-21 | ETL: loading into PostgreSQL with a person's approval | ETL **56/56** (database checks 10/10, was 4/10; load 4/4) | – | 5,676 per task |
 | [EXP-14 part 1](experiments-etl.md#exp-14-part-1--weather-for-the-8-cities) | 2026-10-23 | ETL: weather for the 8 cities; 12 weather + rides questions written | ETL **60/61** incl. live (tool 6/6) | – | 5,177 per task |
 | [EXP-14 part 2](experiments-etl.md#exp-14-part-2--the-sql-agent-reads-loaded-tables) | 2026-10-23 | SQL agent reads loaded tables (external schema) | weather set **11/12**⁷ (was 0/12); main **47/47** | weather **11/12**; main **100%** | 5,104 (**1,878 billed**) |
+| [EXP-14 part 3](experiments-etl.md#exp-14-part-3--the-router-knows-about-loaded-tables) | 2026-10-26 | Router knows which loaded tables exist (bug found in the live demo) | routing **36/36** over 3 runs (was 15/36); other routing checks 11/11 | – | – |
 
 ¹ 95% as first scored; the one miss was a scoring bug (date vs midnight timestamp), fixed and re-scored.
 ² The one "incorrect" verdict was a judge error; its own reasoning found every value correct.

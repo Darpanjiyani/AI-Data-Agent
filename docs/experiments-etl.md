@@ -13,6 +13,7 @@ The ETL experiments, numbered on from the SQL ones (EXP-01 to EXP-10 are in [exp
 | [EXP-13](#exp-13--loading-into-postgresql-with-a-persons-approval) | 2026-10-21 | Loading into PostgreSQL with a person's approval | database checks **10/10** (was 4/10); load tasks **4/4**; full run **56/56** |
 | [EXP-14 part 1](#exp-14-part-1--weather-for-the-8-cities) | 2026-10-23 | Weather for the 8 cities: each location tied to the point it was asked for; output compared row by row; tools report the files really written | tool tests **6/6** (was 5/6); full run **60/61** incl. live; real load approved (4,608 rows) |
 | [EXP-14 part 2](#exp-14-part-2--the-sql-agent-reads-loaded-tables) | 2026-10-23 | The SQL agent reads loaded tables in the external schema | weather questions **11/12** (was 0/12); main set 47/47 |
+| [EXP-14 part 3](#exp-14-part-3--the-router-knows-about-loaded-tables) | 2026-10-26 | The router knows which loaded tables exist (bug found in the live demo) | routing set **36/36** over 3 runs (was 15/36) |
 
 ¹ 9/10 as first scored; the one miss was a scorer bug (−0.0 vs 0.0), fixed and re-scored.
 
@@ -424,3 +425,35 @@ No question-specific notes were added. The weather questions name the rider's ci
 - Every weather-and-rides query joined through the rider's city and the ride's date, as intended.
 - **Cost:** the weather table adds about 430 input tokens to every SQL question (main set 5,104 per question, from 4,671). Billed input stays about the same thanks to caching: 1,878 per question (1,815 in EXP-09).
 - **In the app:** "Were Toronto riders more likely to cancel on snowy days?" joins rides, users and `external.weather_daily` and answers 9.32% on snowy days against 9.84% on other days, from 601 and 1,961 rides. That's no real difference, as expected from synthetic ride data.
+
+---
+
+## EXP-14 part 3 – The router knows about loaded tables
+
+**Found in the live demo.** The example "Which city got the most snow in 2025?" was sometimes answered by the ETL agent ("fetching data is switched off") and sometimes by the SQL agent, with the same text. The router decides which agent answers. Its instructions listed only the ride-sharing tables, and said the ETL agent handles data from web APIs. So a weather question looked like "fetch weather from an API". Part 2 gave the SQL agent the weather table but never told the router. The weather set had only one routing check that should go to the SQL agent (rw1), and it happened to pass.
+
+**Tests first** (`evals/routing_questions.json`, written before the fix): 8 questions about the loaded weather, which must go to the SQL agent (including the demo example), and 4 requests to fetch new weather or load a file, which must go to the ETL agent. The router's answer can vary between runs, so the set runs 3 times before and 3 times after.
+
+**Change**
+
+| # | Change | File |
+|---|---|---|
+| 1 | The router's message now starts with a short list of the loaded tables and their columns, read from the database (`get_loaded_tables()`), with one rule: a question about data in these tables is SQL; ETL only when the person asks to fetch new data, transform a file or load a file. With no loaded tables, the router's input is unchanged. | `agents/data_agent.py`, `agents/sql_analyst.py` |
+| 2 | The router's description of 'sql' covers loaded tables too | `Models/schema.py` |
+| 3 | Approving a load refreshes the list, like the SQL agent's schema | `agents/service.py` |
+
+The list is built from the database, not written for weather: any table a person approves becomes known to the router as well.
+
+**Results with the model**
+
+(2026-10-26, Windows)
+
+| Router | Run 1 | Run 2 | Run 3 | Total |
+|---|:---:|:---:|:---:|:---:|
+| Before the fix | 5/12 | 5/12 | 5/12 | 15/36 |
+| After the fix | 12/12 | 12/12 | 12/12 | **36/36** |
+
+- **The bug wasn't occasional.** The old router sent 7 of the 8 weather questions to the ETL agent, the same way in all 3 runs. The only one it got right, rr06 ("Did Calgary riders take more rides on warm days?"), mentions riders. The 4 requests to fetch or load data were right every time. The demo's typed question reaching the SQL agent was the exception.
+- **No regressions:** the main set's 8 routing checks and the weather set's 3 all still pass with the fix.
+- **The lesson:** part 2 changed what one agent could see, but not what the router knew. Each step that makes a decision needs to know about new data, and the eval needs routing checks for the new data too, not just accuracy checks.
+
