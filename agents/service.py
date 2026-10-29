@@ -36,7 +36,7 @@ class AgentReply:
     sql: str = ""                       # final SQL query (SQL route)
     rows: Optional[list] = None         # query result rows, if the query ran
     refused: bool = False
-    refusal_type: str = ""              # "write_request", "guard", "judge"
+    refusal_type: str = ""              # "write_request", "guard", "judge", "not_in_data"
     retries: int = 0
     error: str = ""                     # database error, if every attempt failed
     steps: list = field(default_factory=list)       # what the agent did, in order

@@ -71,6 +71,7 @@ REFUSAL_LABELS = {
     "guard": "Refused: SQL guard",
     "invalid_sql": "Couldn't write a valid query",
     "judge": "Refused: safety review",
+    "not_in_data": "Not in the data",
 }
 
 # Single-series chart colour, one step for each theme (light / dark surface)
@@ -184,7 +185,9 @@ def render_reply(reply, key: str) -> None:
             st.badge("SQL Analyst", icon=":material/database:", color="blue")
         else:
             st.badge("ETL Analyst", icon=":material/sync_alt:", color="violet")
-        if reply.refused:
+        if reply.refused and reply.refusal_type == "not_in_data":
+            st.badge(REFUSAL_LABELS["not_in_data"], icon=":material/search_off:", color="gray")
+        elif reply.refused:
             st.badge(REFUSAL_LABELS.get(reply.refusal_type, "Refused"),
                      icon=":material/shield:", color="orange")
         if reply.retries:
@@ -196,7 +199,10 @@ def render_reply(reply, key: str) -> None:
             and reply.standalone_question.strip().lower() != reply.question.strip().lower():
         st.caption(f"Understood as: {escape_markdown(reply.standalone_question)}")
 
-    if reply.refused:
+    if reply.refused and reply.refusal_type == "not_in_data":
+        # Not a safety refusal: the data doesn't have what the question needs (EXP-15)
+        st.info(escape_markdown(reply.answer), icon=":material/search_off:")
+    elif reply.refused:
         st.warning(escape_markdown(reply.answer), icon=":material/shield:")
         st.caption("Nothing was run on the database.")
     elif reply.error:

@@ -26,6 +26,32 @@ def clean_sql(text: str) -> str:
 # The SQL step replies with this marker instead of SQL when asked to change data
 WRITE_REQUEST_MARKER = "WRITE_REQUEST"
 
+# ...and with this one when the data can't answer the question, or part of it (EXP-15):
+#   "NOT_IN_DATA: <what's missing>"                      nothing can be answered: no SQL
+#   "-- NOT_IN_DATA: <what's missing>" then the SQL       the rest of the question is answered
+NOT_IN_DATA_MARKER = "NOT_IN_DATA"
+MISSING_LINE = re.compile(rf"^\s*(?:--\s*)?{NOT_IN_DATA_MARKER}\b\s*[:\-]?\s*(.*)$", re.IGNORECASE)
+QUERY_START = re.compile(r"^[\s(]*(SELECT|WITH)\b", re.IGNORECASE)
+
+
+def split_missing(text: str) -> tuple[str, str]:
+    """
+    Separate the NOT_IN_DATA lines (what the database doesn't have) from the SQL.
+    Returns (missing, sql); both may be empty. If the model wrote the marker and then prose
+    instead of a query, there is no SQL to run.
+    """
+    missing, rest = [], []
+    for line in text.strip().splitlines():
+        found = MISSING_LINE.match(line.strip().strip("`"))
+        if found:
+            missing.append(found.group(1).strip() or "Part of what the question asks for isn't in the database.")
+        else:
+            rest.append(line)
+    sql = clean_sql("\n".join(rest))
+    if missing and not QUERY_START.match(sql):
+        sql = ""
+    return " ".join(missing), sql
+
 # How many times the agent may rewrite a query after a database error
 MAX_SQL_RETRIES = 2
 
@@ -156,7 +182,16 @@ Rules:
 8. This agent can only read data. If the user asks to add, change, remove or delete data, or to
    create, alter or drop tables (even as part of a larger request, or when it
    doesn't say which records), don't write SQL:
-   reply with exactly {WRITE_REQUEST_MARKER}"""
+   reply with exactly {WRITE_REQUEST_MARKER}
+9. Answer only what the data can show. If the question needs information the schema doesn't
+   have (a column, a table or a listed value that doesn't exist, or more detail than the
+   data records), don't answer a different question instead, and don't use a column as if
+   it meant something else.
+   - If no part of the question can be answered, don't write SQL: reply with
+     {NOT_IN_DATA_MARKER}: and one sentence saying what the database doesn't have, for example
+     "{NOT_IN_DATA_MARKER}: The database doesn't record vehicle mileage."
+   - If part of it can be answered, write the query for that part and put this line first:
+     -- {NOT_IN_DATA_MARKER}: <one sentence saying what the database doesn't have>"""
 
 
 def sql_context() -> str:
@@ -192,7 +227,8 @@ def generate_sql(state: AgentSchema) -> AgentSchema:
     llm = pick_llm("medium")  # Pick the appropriate LLM based on the specified level
     generated_sql_query = llm.invoke(sql_messages(f"User's question: {state.curated_ques}")).text
 
-    return {"generated_sql_query": clean_sql(generated_sql_query)}
+    missing, sql_query = split_missing(generated_sql_query)
+    return {"generated_sql_query": sql_query, "missing_data": missing}
 
 
 # Safe node
@@ -200,7 +236,11 @@ def is_safe_sql(state: AgentSchema) -> AgentSchema:
 
     sql_query = state.generated_sql_query
 
-    # Step 0: the SQL step recognised a request to change data and wrote no SQL.
+    # Step 0: the SQL step found that the data can't answer the question and wrote no SQL (EXP-15).
+    if not sql_query.strip() and state.missing_data:
+        return {"is_safe": "No", "refusal_type": "not_in_data", "comments": state.missing_data}
+
+    # The SQL step recognised a request to change data and wrote no SQL.
     if sql_query.strip().strip("`.").upper() == WRITE_REQUEST_MARKER:
         return {"is_safe": "No", "refusal_type": "write_request",
                 "comments": "The request asks to change data, and this agent can only read data."}
@@ -239,7 +279,13 @@ def canceled_sql(state: AgentSchema) -> AgentSchema:
 
     comments = state.comments.removeprefix("Blocked by the SQL guard: ")
 
-    if state.refusal_type == "write_request":
+    if state.refusal_type == "not_in_data":
+        missing = state.missing_data.strip()
+        # End with a full stop, unless it already ends with one (also inside quotes: "...days.")
+        if missing and missing.rstrip("\"'”’)")[-1:] not in (".", "!", "?"):
+            missing += "."
+        final_answer = f"I can't answer that from the data I have. {missing}\n\n{data_overview()}"
+    elif state.refusal_type == "write_request":
         final_answer = (
             "I can only read data, so I can't make changes to the database, such as adding, "
             "updating or deleting records, or creating or dropping tables. I can help you look "
@@ -259,6 +305,15 @@ def canceled_sql(state: AgentSchema) -> AgentSchema:
         final_answer = f"I didn't run this request because the safety review flagged the query: {comments}"
 
     return {"final_answer": final_answer, "messages": [AIMessage(content=final_answer)]}
+
+def data_overview() -> str:
+    """What the agent CAN answer questions about, for replies to questions it can't answer."""
+    overview = "I can answer questions about riders and drivers, their vehicles, rides, payments and ratings."
+    loaded = get_loaded_tables()
+    if loaded:
+        overview += "\nAlso loaded from outside sources:\n" + loaded
+    return overview
+
 
 # Execute SQL Query Node
 def execute_sql(state: AgentSchema) -> AgentSchema:
@@ -311,8 +366,9 @@ Return only the SQL query.
     # Same cached context as generate_sql, so a retry reads it from the cache too
     corrected_sql = llm.invoke(sql_messages(request)).text
 
-    return {"generated_sql_query": clean_sql(corrected_sql), "retry_count": state.retry_count + 1,
-            "refusal_type": "", "result_issue": ""}
+    missing, sql_query = split_missing(corrected_sql)
+    return {"generated_sql_query": sql_query, "retry_count": state.retry_count + 1,
+            "missing_data": missing or state.missing_data, "refusal_type": "", "result_issue": ""}
 
 
 # Represent the final answer Node
@@ -323,6 +379,14 @@ def represent_final_answer(state: AgentSchema) -> AgentSchema:
 
     llm = pick_llm("low")
 
+    # The query answers only part of the question: the rest isn't in the database (EXP-15)
+    missing_part = ""
+    if state.missing_data:
+        missing_part = f"""
+    Part of the question can't be answered from the database: {state.missing_data}
+    Start the answer by saying so in one sentence, then answer the rest from the result.
+    Don't present any value in the result as the missing information.\n"""
+
     prompt = f"""
     You are an SQL analyst agent. Your task is to provide a final answer to the user based on the
     execution result of the SQL query and the user's original question. The final answer should be
@@ -330,13 +394,15 @@ def represent_final_answer(state: AgentSchema) -> AgentSchema:
     details in the final answer. The final answer should be in a user-friendly format that is easy to
     understand. If the execution result is empty or does not provide a clear answer to the user's question, explain this in the final answer.
     Base the answer only on the execution result. Don't guess about data that isn't in the result
-    (for example, don't claim the data stops at a certain date unless the result shows it). \n
+    (for example, don't claim the data stops at a certain date unless the result shows it).
+    If the result is empty, or its only values are null, the database has no matching records:
+    say that there's no data for what was asked, rather than reporting 0 or saying it didn't happen. \n
     The SQL query below produced the result. It already applied the question's filters,
     sorting and limits, so if it returns only the top row(s) for a "which is the most /
     least" question, that row is the answer: state it directly.
     Here is the SQL query: {state.generated_sql_query} \n
     Here is the execution result: {execution_result} \n
-    Here is the user's original question: {curated_question}
+    Here is the user's original question: {curated_question}{missing_part}
     Reply in the same language as the user's own message: {state.user_question}
     """
 
