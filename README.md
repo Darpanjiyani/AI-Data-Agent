@@ -6,9 +6,9 @@ Ask questions about your data in plain English, and let a team of AI agents answ
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue) ![LangGraph](https://img.shields.io/badge/LangGraph-multi--agent-purple) ![Claude](https://img.shields.io/badge/LLM-Claude-orange) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-read--only-336791)
 
-| Execution accuracy (47 questions, avg of 3 runs) | Held-out sets (2 × 20 unseen questions) | Follow-up conversations (32) | Change requests executed |
-|:---:|:---:|:---:|:---:|
-| **89.4% → 99.3%** | **100%** | **100%** | **0 / 22**, all clearly refused |
+| Execution accuracy (47 questions, avg of 3 runs) | Held-out sets (2 × 20 unseen questions) | Follow-up conversations (32) | Change requests executed | Questions the data can't answer |
+|:---:|:---:|:---:|:---:|:---:|
+| **89.4% → 99.3%** | **100%** | **100%** | **0 / 22**, all clearly refused | **2/15 → 14/15** say what's missing |
 
 ![Demo: a question answered with a chart, a follow-up about "the top one" understood as Montreal, then a vague delete request refused](docs/demo.gif)
 
@@ -128,6 +128,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 - Uses prompt caching: the instructions, data notes and schema are identical for every question, so they are sent as a cached block that Claude reads at a tenth of the normal input price after the first question.
 - Blocks anything that isn't a single read-only query, then runs it as a read-only database user.
 - Refuses requests to change data with a clear explanation instead of attempting them.
+- Says what the data can't answer (EXP-15): asked for something the database doesn't have (a tip, a driver's age, a city with no weather), it replies "I can't answer that from the data I have", names what's missing and lists what it can answer. If part of a question can be answered, it answers that part and says which part it can't. It no longer answers a different question instead, such as reporting total fares as "commission".
 - Recovers from its own mistakes: if a query fails, or the guard can't parse it (a typo such as `SELECE`), the error goes back to Claude, which rewrites the query (up to 2 retries, each re-checked for safety).
 - Checks that a successful result fits the question: if a question asks for one number ("How many users...?") but the query returns many rows, for example a `COUNT` inside a `GROUP BY`, the query is rewritten within the same retry limit. The check is rule-based, so it adds no model call when the result is fine.
 - Returns results with column names and explains them in plain English. The answer step also sees the SQL, so it knows when a result is already sorted and cut to the top row and can state it directly.
@@ -359,6 +360,7 @@ uv run evals/run_eval.py --no-judge          # skip the LLM judge (cheaper)
 uv run evals/run_eval.py --set holdout       # held-out questions (see below)
 uv run evals/run_eval.py --set holdout2      # second held-out set (see below)
 uv run evals/run_eval.py --set weather       # weather + rides questions (needs external.weather_daily)
+uv run evals/run_eval.py --set unanswerable  # questions the data can't answer + look-alike controls (EXP-15)
 uv run evals/run_followup_eval.py            # follow-up conversations (see below)
 uv run evals/run_followup_eval.py --set fresh   # fresh follow-up conversations (EXP-07)
 uv run evals/run_followup_eval.py --set check   # final check conversations (EXP-07)
@@ -382,6 +384,9 @@ In EXP-07 one held-out question (o14) showed the same weakness as a follow-up co
 
 ### Weather questions
 `evals/weather_questions.json` (12 SQL, 2 safety, 3 routing) asks about the loaded weather on its own ("On how many days in 2025 did it snow in Winnipeg?") and joined with rides ("How many rides did Toronto riders request on days when it snowed in Toronto?"). Rides have no city column, so a ride's city is its rider's city, and every question says so. The set was written before the SQL agent could see any weather data, under the held-out rule.
+
+### Questions the data can't answer
+`evals/unanswerable_questions.json` (EXP-15) holds 15 questions the database can't answer (12 not at all, 3 only in part) and 12 look-alike questions it can, as controls. Each unanswerable question has a note saying what's missing. An LLM judge checks that the reply says what's missing and doesn't present a result for a different question as the answer; the runner also records whether a query ran and whether the user saw a guard message. The controls catch a fix that refuses too much. Written before the fix, under the held-out rule.
 
 ### Keeping it honest
 - The eval is only changed when an answer key or a question's wording is wrong, never to raise the score.
@@ -414,10 +419,13 @@ In EXP-07 one held-out question (o14) showed the same weakness as a follow-up co
 | v2.5 | Same version, **second held-out set** (20 questions written after the last change) | **100%** | **100%** | 4,544 (**1,925 billed**) | 6.0 s |
 | v2.6 | EXP-14: reads loaded tables; **weather + rides set** (12 questions written before the agent saw the data; 0/12 before) | **91.7%** (11/12)³ | 91.7% | 5,122 (2,299 billed) | 6.6 s |
 | v2.6 | Same version, main set (regression check) | **100%** | **100%** | 5,104 (**1,878 billed**) | 5.9 s |
+| v2.7 | EXP-15: says what the data can't answer; **can't-answer set** (15 questions, 2/15 before) | 14/15 passed⁴; controls **12/12** | – | 5,212 (2,209 billed) | 5.1 s |
+| v2.7 | Same version, main set / second held-out set / weather set (regression checks) | **100%** / **100%** / 91.7% | same | 5,277 (**2,007 billed**) on the main set | 5.5 s |
 
 ¹ The one miss is h06, the same occasional mistake seen before caching; see [EXP-08](docs/experiments.md#exp-08--prompt-caching). Billed input = uncached input + 0.1 × cache reads + 1.25 × cache writes.
 ² h06 still writes the wrong-shape query sometimes (2 of 6 runs in this round), but the sanity check now catches it and the rewritten query is correct; h06 passed 5/5 when run alone. See [EXP-09](docs/experiments.md#exp-09--result-sanity-check).
 ³ 10/12 as first scored: wq06 was right but returned a midnight timestamp with a time zone, which the scorer now accepts. The miss, wq12, totalled completed payments by drop-off date instead of ride fares by request date.
+⁴ Judged by an LLM: the reply must say what data is missing and must not answer a different question. Before the fix, 8 of 15 replies were guard errors and 2 answered a different question; after, 0 and 0. The miss, u08, asks about a date before the weather data starts; the reply says there's no data but not why. See [EXP-15](docs/experiments.md#exp-15--saying-what-the-data-cant-answer).
 
 Results by category, notes on each number, and the caveats are in [docs/experiments.md](docs/experiments.md#results-by-version); every round has its own write-up there.
 
@@ -465,6 +473,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - [x] Result sanity checks (e.g. a "how many" question should return one row)
 - [x] Retry when the guard finds invalid SQL, not only on database errors
 - [x] Show the SQL to the answer step, so a top-1 result is stated confidently
+- [x] Say what the data can't answer instead of answering a different question: 14/15, was 2/15 (EXP-15)
 
 **Cost and speed**
 - [x] Schema built once per process; SQL prompt 41% smaller
@@ -494,6 +503,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - Answers can vary between runs: Claude Sonnet 5 thinks by default and doesn't accept a custom `temperature`, so variance is reduced with explicit rules rather than sampling settings.
 - The result check only covers questions phrased as asking for one number; a query that runs but answers a different question in some other way isn't caught.
 - A request that mixes reading and changing data ("show the cancelled rides, then delete them") is refused as a whole, rather than answering only the read part.
+- The agent can't see the date range of each table, so for a period the data doesn't cover it says "no data for that period" but not that the data starts later (EXP-15).
 
 ---
 
@@ -532,6 +542,7 @@ AI-Data-Agent/
 │   ├── holdout_questions.json  # Held-out questions, never used to design fixes
 │   ├── holdout2_questions.json # Second held-out set, written 2026-10-14
 │   ├── weather_questions.json  # Weather + rides questions, written before the agent saw the data (EXP-14)
+│   ├── unanswerable_questions.json # Questions the data can't answer + answerable controls (EXP-15)
 │   ├── followup_questions.json # Multi-turn conversations for conversation memory
 │   ├── followup_fresh_questions.json # Fresh conversations, written before the EXP-07 fixes
 │   ├── followup_check_questions.json # Final check conversations for EXP-07 part 2

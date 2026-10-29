@@ -22,6 +22,7 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 | [EXP-14 part 1](experiments-etl.md#exp-14-part-1--weather-for-the-8-cities) | 2026-10-23 | ETL: weather for the 8 cities; 12 weather + rides questions written | ETL **60/61** incl. live (tool 6/6) | – | 5,177 per task |
 | [EXP-14 part 2](experiments-etl.md#exp-14-part-2--the-sql-agent-reads-loaded-tables) | 2026-10-23 | SQL agent reads loaded tables (external schema) | weather set **11/12**⁷ (was 0/12); main **47/47** | weather **11/12**; main **100%** | 5,104 (**1,878 billed**) |
 | [EXP-14 part 3](experiments-etl.md#exp-14-part-3--the-router-knows-about-loaded-tables) | 2026-10-26 | Router knows which loaded tables exist (bug found in the live demo) | routing **36/36** over 3 runs (was 15/36); other routing checks 11/11 | – | – |
+| [EXP-15](#exp-15--saying-what-the-data-cant-answer) | 2026-10-29 | Saying what the data can't answer (NOT_IN_DATA reply) | can't-answer **14/15** (was 2/15); controls 12/12; main 47/47, held-out 2 20/20, weather 11/12 | same | 5,277 (2,007 billed) on the main set |
 
 ¹ 95% as first scored; the one miss was a scoring bug (date vs midnight timestamp), fixed and re-scored.
 ² The one "incorrect" verdict was a judge error; its own reasoning found every value correct.
@@ -588,6 +589,78 @@ The filtering logic is right, but the `COUNT` sits in the same query as `GROUP B
 3. **Cost is in line with earlier runs.** Billed input was a little higher than EXP-09's held-out run (1,925 vs 1,765), mostly from a lower cache share (65% vs 68%); the first question of a run always pays the cache write.
 
 **What it means:** this set is now the independent check. Like the first one, it stays independent only until it informs a fix; when that happens, a third set gets written.
+
+---
+
+## EXP-15 – Saying what the data can't answer
+
+Goal: when a question asks for something the database doesn't have (a tip, a driver's age, a city with no weather data), the agent should say so clearly and name what's missing. It should not answer a different question as if it were the one asked, and it should not show a guard error.
+
+### Tests first
+
+`evals/unanswerable_questions.json` was written on 2026-10-29, before any change, under the held-out rule (not used to design fixes, not changed after seeing results):
+- 15 questions the data can't answer. 12 can't be answered at all: tips, driver age, speeding tickets, premium/XL rides, promo codes, traffic, rush-hour thunderstorms (the weather is daily), snow in December 2024 (the weather starts in 2025), Quebec City (not one of the 8 cities), the company's commission, ratings drivers gave to riders (only drivers are rated), and rides from "the airport" (only coordinates). 3 can be answered in part, for example "the average fare and the average tip".
+- Each one has a note saying what is missing, and the 3 partial ones have a reference query for the part the data covers.
+- 12 look-alike controls the data can answer (average fare, model year, cancellations because the rider didn't show up, Montreal snow in December 2025, Ottawa on 2025-07-01, and so on). They catch a fix that refuses too much.
+
+Scoring (`run_eval.py --set unanswerable`): an LLM judge reads the reply and the missing-data note, writes its reasoning first, then gives two verdicts: does the reply say what's missing, and does it present a result for a different question as the answer? A reply passes if it says what's missing, doesn't answer another question, and isn't a guard or safety-judge message. The runner also records, without the judge, whether a query ran and whether the user got a guard message. Controls are scored like the main set, plus a count of controls where no query ran.
+
+### Baseline (2026-10-29, before the fix)
+
+2/15 passed. Reading the replies:
+- In 8 of the 15 the model knew the data was missing. It wrote "There is no tip data available in the schema, so this question cannot be answered." where the SQL should go. The SQL guard read that sentence as invalid SQL, so the user saw "I couldn't turn this request into a valid read-only query". The right answer was there but never reached the user.
+- 2 answered a different question as if it were this one: the total of all fares reported as the company's commission ($956,544), and the average rating of drivers reported as the rating drivers gave to riders (4.43).
+- 2 ran a query, got nothing back, and said only that there was no data for that date or city, without saying why (u08, u09).
+- 1 partial question answered the fare and said the tip "was not included in the query", as if the data existed (p01).
+- The other 2 partial questions passed. One of them (p03) was judged generously: the reply suggests the fee data could come from the payments table. It's left as scored, because changing the scorer after seeing results isn't allowed.
+- Controls: 12/12 correct, 0 refused.
+
+### Changes
+
+The fix was written before the baseline results came in.
+
+| # | Change | Targets |
+|---|---|---|
+| 1 | SQL rule 9: answer only what the data can show. If no part can be answered, reply `NOT_IN_DATA: <one sentence on what's missing>` instead of SQL. If part can be answered, write the query for that part with a first line `-- NOT_IN_DATA: ...`. Never use a column as if it meant something else. | Guard errors, wrong-question answers |
+| 2 | `split_missing()` separates the marker lines from the SQL; if only the marker and prose are left, there's no SQL to run | Prose reaching the guard |
+| 3 | `is_safe_sql`: no SQL plus a missing-data note gives `refusal_type = "not_in_data"`; nothing runs on the database | Clear reply instead of a guard error |
+| 4 | The reply: "I can't answer that from the data I have." + what's missing + what the agent can answer (including the loaded tables and their columns) | Telling the user what they can ask instead |
+| 5 | Answer step: for partial questions, say first what's missing, then answer the rest. An empty or null result means there's no data for what was asked, not 0 | Partial questions, empty results |
+| 6 | App: a grey "Not in the data" badge and an info box, so this doesn't look like a safety refusal | Interface |
+
+### Results (2026-10-29, one run each)
+
+| Metric | Before | After |
+|---|:---:|:---:|
+| Can't-answer questions passed | 2/15 | 14/15 |
+| Answered a different question as if it were this one | 2/15 | 0/15 |
+| Got a guard error | 8/15 | 0/15 |
+| A query ran | 7/15 | 4/15 (the 3 partial ones and u08) |
+| Partial questions: also answered the part the data covers | 3/3 | 3/3 |
+| Controls correct (execution and judge) | 12/12 | 12/12 |
+| Controls refused (too cautious) | 0/12 | 0/12 |
+| Billed input tokens per question (this set) | 2,114 | 2,209 |
+
+Regression checks with the fix:
+
+| Set | Execution | Answer | Safety / routing | Billed input per question |
+|---|:---:|:---:|:---:|:---:|
+| Main (47) | 47/47 | 47/47 | 4/4 refused, 8/8 routed | 2,007 (was 1,878 in EXP-14 part 2) |
+| Held-out 2 (20) | 20/20 | 20/20 | 3/3 refused, 4/4 routed | 2,084 (was 1,925 in EXP-10) |
+| Weather (12) | 11/12 | 11/12 | 2/2 refused, 3/3 routed | 2,035 (was 2,299 in EXP-14 part 2) |
+
+The weather miss is wq12, the same miss as in EXP-14 (it used payments and the drop-off date).
+
+### Findings
+
+1. The biggest problem was the guard, not the model. In 8 of the 15 the model already knew the answer was "not in the data", but the guard turned it into an error. A fixed reply format lets the agent say so, and the guard is never asked to read prose.
+2. Wrong-question answers are gone (2/15 to 0/15). Rule 9 says not to use a column as if it meant something else; commission and ratings of riders now get a clear "not in the data".
+3. No over-refusal. All 12 look-alike controls still ran a query and got the right answer, and the main and held-out 2 sets stayed at 100%.
+4. The one miss, u08 (snow in Montreal in December 2024), is a date the data doesn't cover. The schema doesn't show date ranges, so the model writes a normal query and gets nothing back. The reply now says "There is no snowfall data available for Montreal during December 2024 in the database", which is better than before but doesn't say why (the weather starts in 2025). Fixing it would mean showing date ranges in the schema; that's left open, because the fix would be designed around this one question.
+5. Cost: the new rule makes the cached prompt slightly longer. Billed input on the main set went from 1,878 to 2,007 per question (+7%); some of the difference is run-to-run cache variation.
+6. After the results, a small formatting fix was made: a missing-data sentence ending in a quote no longer gets a second full stop ("heavy-traffic days.".). It changes no verdict.
+
+Caveat: one run per set. The 15 questions cover 6 kinds of missing data, so 14/15 is a measure of these kinds, not a guarantee for every question.
 
 ---
 
