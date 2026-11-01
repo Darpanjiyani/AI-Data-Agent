@@ -24,3 +24,6 @@ agent_state/
 .env.cloud
 .streamlit/secrets.toml
 data/demo/
+
+# Real NYC trip files downloaded by utils/load_nyc_trips.py (EXP-16; hundreds of MB)
+data/nyc/

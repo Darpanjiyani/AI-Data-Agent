@@ -6,7 +6,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.llm_pick import pick_llm
 from utils.database import DatabaseUtil, reader_connection_details
 from utils.sql_guard import is_read_only
-from utils.schema_notes import AGENT_TABLES, DATA_NOTES, EXTERNAL_SCHEMA
+from utils.schema_notes import EXTERNAL_SCHEMA, current_dataset
 from utils.result_checks import result_issue
 import json
 from functools import lru_cache
@@ -62,10 +62,17 @@ def get_schema_context() -> str:
     Describe the agent's tables once per process and reuse it for every question,
     instead of querying the database schema on every request.
     """
+    dataset = current_dataset()  # AGENT_DATASET: the sample rides (default) or real NYC trips (EXP-16)
     db = DatabaseUtil(reader_connection_details())
-    schema_info = db.schema_details("public", tables=AGENT_TABLES)
+    schema_info = db.schema_details(dataset["schema"], tables=dataset["tables"],
+                                    qualify_names=dataset["qualify_names"])
     if schema_info.startswith("Error"):
         get_schema_context.cache_clear()  # don't cache a failed attempt
+        return schema_info
+    if dataset["qualify_names"]:
+        schema_info = (f"Always write these tables with the schema name, as listed "
+                       f"({dataset['schema']}.<table>).\n" + schema_info)
+    if not dataset["loaded_data"]:
         return schema_info
     # Tables a person approved loading (EXP-13), e.g. daily weather per city (EXP-14)
     loaded = db.schema_details(EXTERNAL_SCHEMA, qualify_names=True)
@@ -78,12 +85,15 @@ def get_schema_context() -> str:
 @lru_cache(maxsize=1)
 def get_loaded_tables() -> str:
     """
-    One line per table in the external schema, with its columns, for the router, e.g.
+    One line per table in the external schema (or, for a dataset outside "public" such as the
+    NYC trips, in the dataset's own schema), with its columns, for the router, e.g.
     "external.weather_daily (city, date, temp_max_c, ...)". Empty if there are none (or the
     database can't be reached). The router needs it to know that, say, weather questions are
     about data already in the database, not something to fetch from an API.
     """
     from psycopg2 import connect
+    dataset = current_dataset()
+    schema = EXTERNAL_SCHEMA if dataset["loaded_data"] else dataset["schema"]
     try:
         connection = connect(**reader_connection_details())
     except Exception:
@@ -93,8 +103,8 @@ def get_loaded_tables() -> str:
         with connection.cursor() as cursor:
             cursor.execute("SELECT table_name, string_agg(column_name, ', ' ORDER BY ordinal_position) "
                            "FROM information_schema.columns WHERE table_schema = %s "
-                           "GROUP BY table_name ORDER BY table_name", (EXTERNAL_SCHEMA,))
-            return "\n".join(f"- {EXTERNAL_SCHEMA}.{table} ({columns})" for table, columns in cursor.fetchall())
+                           "GROUP BY table_name ORDER BY table_name", (schema,))
+            return "\n".join(f"- {schema}.{table} ({columns})" for table, columns in cursor.fetchall())
     except Exception:
         get_loaded_tables.cache_clear()
         return ""
@@ -201,7 +211,7 @@ def sql_context() -> str:
     marked for prompt caching, so after the first question Claude reads it from its
     cache at a tenth of the normal input price instead of processing it again.
     """
-    return f"{SQL_RULES.strip()}\n\nData notes:\n{DATA_NOTES}\n\n{get_schema_context()}"
+    return f"{SQL_RULES.strip()}\n\nData notes:\n{current_dataset()['notes']}\n\n{get_schema_context()}"
 
 
 def sql_messages(user_text: str) -> list:
@@ -308,8 +318,9 @@ def canceled_sql(state: AgentSchema) -> AgentSchema:
 
 def data_overview() -> str:
     """What the agent CAN answer questions about, for replies to questions it can't answer."""
-    overview = "I can answer questions about riders and drivers, their vehicles, rides, payments and ratings."
-    loaded = get_loaded_tables()
+    dataset = current_dataset()
+    overview = f"I can answer questions about {dataset['covers']}."
+    loaded = get_loaded_tables() if dataset["loaded_data"] else ""
     if loaded:
         overview += "\nAlso loaded from outside sources:\n" + loaded
     return overview

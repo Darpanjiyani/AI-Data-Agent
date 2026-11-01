@@ -25,6 +25,7 @@ Usage (from the project root):
   uv run evals/run_eval.py --set weather      # weather + rides questions (needs external.weather_daily)
   uv run evals/run_eval.py --set routing      # routing only: loaded weather (sql) vs fetching new data (etl)
   uv run evals/run_eval.py --set unanswerable # questions the data can't answer + look-alike controls (EXP-15)
+  uv run evals/run_eval.py --set nyc          # 20.8M real NYC Uber/Lyft trips (EXP-16; needs utils/load_nyc_trips.py)
   uv run evals/run_eval.py --ids s01 j07      # specific questions
   uv run evals/run_eval.py --category join    # one category
   uv run evals/run_eval.py --no-judge         # skip the LLM judge (cheaper)
@@ -69,10 +70,16 @@ QUESTION_SETS = {
     "routing": PROJECT_ROOT / "evals" / "routing_questions.json",
     # Questions the data can't answer (fully or partly) + answerable look-alikes (EXP-15). Same rule.
     "unanswerable": PROJECT_ROOT / "evals" / "unanswerable_questions.json",
+    # Real NYC Uber/Lyft trips, one month, 20.8M rows (EXP-16). Runs the agent with AGENT_DATASET=nyc. Same rule.
+    "nyc": PROJECT_ROOT / "evals" / "nyc_questions.json",
 }
+# Reference results for sets whose reference queries are slow (big tables), saved after the first run
+ANSWER_KEYS_DIR = PROJECT_ROOT / "evals" / "answer_keys"
+REFERENCE_TIMEOUT = "600s"   # reference queries only; the agent keeps the read-only user's 15 s limit
 RESULTS_DIR = PROJECT_ROOT / "evals" / "results"
 TABLES_TO_WATCH = ["users", "vehicles", "rides", "payments", "ratings",
                    "external.weather_daily"]   # EXP-14: loaded weather (if it exists yet)
+DATASET_TABLES = {"nyc": ["nyc.trips", "nyc.zones", "nyc.companies"]}   # EXP-16
 
 
 # --------------------------------------------------------------------------- #
@@ -266,6 +273,20 @@ def judge_cant_answer(judge, q, answer):
 #  Running the agent                                                           #
 # --------------------------------------------------------------------------- #
 
+def retry_reason(last: dict) -> str:
+    """Why fix_sql was called, from the steps just before it."""
+    result = " ".join(str(last.get("sql_query_execution_result", "")).split())  # one line
+    if last.get("refusal_type") == "invalid_sql":
+        return "invalid SQL (the guard couldn't parse it)"
+    if last.get("result_issue"):
+        return f"result check: {last['result_issue'][:150]}"
+    if "statement timeout" in result:
+        return "timeout (the 15 s limit)"
+    if result.startswith("Error"):
+        return f"database error: {result.removeprefix('Error executing query: ')[:150]}"
+    return "unknown"
+
+
 def run_sql_agent(sql_analyst, question: str) -> dict:
     """Run one question through the SQL agent and collect what we need."""
     initial_state = {
@@ -280,8 +301,18 @@ def run_sql_agent(sql_analyst, question: str) -> dict:
         "final_answer": "",
     }
     start = time.perf_counter()
+    # Streamed step by step (same run as invoke) so the report can say WHY each retry happened (EXP-16)
+    output, retry_reasons, last = dict(initial_state), [], {}
     with get_usage_metadata_callback() as usage:
-        output = sql_analyst.invoke(initial_state)
+        for update in sql_analyst.stream(initial_state, stream_mode="updates"):
+            for node, changes in update.items():
+                changes = changes or {}
+                if node == "fix_sql":
+                    retry_reasons.append(retry_reason(last))
+                    last = {}
+                last.update({k: v for k, v in changes.items()
+                             if k in ("refusal_type", "comments", "sql_query_execution_result", "result_issue")})
+                output.update(changes)
     seconds = time.perf_counter() - start
 
     tokens = summarize_usage(usage.usage_metadata)
@@ -294,15 +325,16 @@ def run_sql_agent(sql_analyst, question: str) -> dict:
         "result": output.get("sql_query_execution_result", ""),
         "final_answer": output.get("final_answer", ""),
         "retries": output.get("retry_count", 0),
+        "retry_reasons": retry_reasons,
         "refusal_type": output.get("refusal_type", ""),
         "seconds": round(seconds, 2),
         **tokens,  # input/output tokens, cache reads/writes, billed input tokens
     }
 
 
-def table_counts(db) -> dict:
+def table_counts(db, tables=TABLES_TO_WATCH) -> dict:
     counts = {}
-    for table in TABLES_TO_WATCH:
+    for table in tables:
         if "." in table:   # a loaded table (EXP-14) may not exist yet: that's "absent", not an error
             exists = parse_result(db.execute_query(f"SELECT to_regclass('{table}') IS NOT NULL AS found"))
             if exists and str(exists[0][0]).lower() in ("false", "0"):
@@ -334,6 +366,9 @@ def main():
     args = parser.parse_args()
 
     questions = json.loads(QUESTION_SETS[args.set].read_text(encoding="utf-8"))
+    # Which data the agent answers about (EXP-16): set before the agents are imported
+    dataset = questions.get("dataset", "rides")
+    os.environ["AGENT_DATASET"] = dataset
     sql_questions = questions["sql_questions"]
     safety_questions = [] if args.skip_safety else questions.get("safety_questions", [])
     routing_questions = [] if args.skip_routing else questions.get("routing_questions", [])
@@ -362,11 +397,39 @@ def main():
     db = DatabaseUtil(reader_connection_details())
     judge = None if args.no_judge else pick_llm("medium").with_structured_output(AnswerJudgement)
 
-    counts_before = table_counts(db)
+    # Reference answers. On big tables (EXP-16) the reference queries get a longer time limit than the
+    # agent, and their results are saved, so later runs don't repeat minutes of full scans.
+    slow = questions.get("slow_references", False)
+    ref_db = DatabaseUtil(reader_connection_details(), statement_timeout=REFERENCE_TIMEOUT) if slow else db
+    key_path = ANSWER_KEYS_DIR / f"{args.set}.json"
+    answer_key = json.loads(key_path.read_text(encoding="utf-8")) if slow and key_path.exists() else {}
+
+    def reference(query: str) -> str:
+        if query in answer_key:
+            return answer_key[query]
+        result = ref_db.execute_query(query)
+        if slow and not result.startswith("Error"):
+            answer_key[query] = result
+            ANSWER_KEYS_DIR.mkdir(parents=True, exist_ok=True)
+            key_path.write_text(json.dumps(answer_key, indent=1), encoding="utf-8")
+        return result
+
+    watched = TABLES_TO_WATCH + DATASET_TABLES.get(dataset, [])
+    counts_before = table_counts(db, watched)
+
+    # How long the schema description takes to build (once per process; slower on big tables, EXP-16)
+    from agents.sql_analyst import get_schema_context
+    start = time.perf_counter()
+    schema_text = get_schema_context()
+    schema_seconds = round(time.perf_counter() - start, 1)
+    print(f"Schema description built in {schema_seconds}s"
+          + ("" if not schema_text.startswith("Error") else f"  ({schema_text[:200]})"))
     report = {
         "run_at": datetime.now().isoformat(timespec="seconds"),
         "question_set": args.set,
         "options": vars(args),
+        "dataset": dataset,
+        "schema_seconds": schema_seconds,
         "sql": [], "safety": [], "routing": [], "unanswerable": [],
     }
 
@@ -376,10 +439,10 @@ def main():
         print(f"[{n}/{total}] {q['id']}  {q['question']}")
         entry = {"id": q["id"], "category": q["category"], "question": q["question"]}
 
-        reference_text = db.execute_query(q["reference_sql"])
+        reference_text = reference(q["reference_sql"])
         # Equivalent answers in other formats (e.g. month dates instead of month numbers)
         accepted_results = [parse_result(reference_text)] + [
-            parse_result(db.execute_query(alt)) for alt in q.get("alternative_sql", [])
+            parse_result(reference(alt)) for alt in q.get("alternative_sql", [])
         ]
         entry["reference_result"] = reference_text
 
@@ -475,7 +538,7 @@ def main():
         print(f"[can't answer] {q['id']}  {q['question']}")
         entry = {"id": q["id"], "category": q["category"], "question": q["question"], "missing": q["missing"]}
         if q.get("answerable_sql"):
-            q = {**q, "answerable_result": db.execute_query(q["answerable_sql"])}
+            q = {**q, "answerable_result": reference(q["answerable_sql"])}
             entry["answerable_result"] = q["answerable_result"]
         try:
             run = run_sql_agent(sql_analyst, q["question"])
@@ -502,7 +565,7 @@ def main():
               f"{'  (guard/judge message)' if entry['guard_message'] else ''}  ({entry.get('seconds', '-')}s)")
         report["unanswerable"].append(entry)
 
-    counts_after = table_counts(db)
+    counts_after = table_counts(db, watched)
     report["database_unchanged"] = counts_before == counts_after
     report["table_counts"] = {"before": counts_before, "after": counts_after}
 
@@ -556,10 +619,19 @@ def build_summary(report, judged: bool) -> dict:
                 lines.append(f"Prompt cache:        {pct(read, total_in)} of input tokens read from cache; "
                              f"billed input = {billed:,.0f} normal-price tokens per question")
 
+            # Queries stopped by the read-only user's 15-second limit (EXP-16: big tables)
+            timeouts = [e for e in sql if "statement timeout" in str(e.get("result", ""))]
+            summary["timeouts"] = len(timeouts)
+            lines.append(f"Timed out (15 s):    {len(timeouts)}/{len(sql)} final queries hit the time limit")
+
             retried = [e for e in timed if e.get("retries", 0) > 0]
             recovered = [e for e in retried if e["execution_match"]]
             summary.update({"questions_retried": len(retried), "questions_recovered": len(recovered)})
             lines.append(f"Self-correction:     {len(retried)} question(s) needed a retry, {len(recovered)} recovered")
+            reasons = Counter(r.split(":")[0].split(" (")[0] for e in timed for r in e.get("retry_reasons", []))
+            if reasons:
+                summary["retry_reasons"] = dict(reasons)
+                lines.append("Why retried:         " + ", ".join(f"{n} {why}" for why, n in reasons.most_common()))
 
         by_cat = {}
         for e in sql:
@@ -605,8 +677,10 @@ def build_summary(report, judged: bool) -> dict:
         if sql:
             refused = sum(e.get("is_safe") != "Yes" for e in sql)
             summary["controls_refused"] = refused
-            lines.append(f"Controls refused:    {refused}/{len(sql)} answerable look-alikes got no query (too cautious)")
+            lines.append(f"Answerable refused:  {refused}/{len(sql)} answerable questions got no query (too cautious)")
 
+    if report.get("schema_seconds") is not None:
+        lines.append(f"Schema description:  built in {report['schema_seconds']}s (once per process)")
     lines.append(f"Database unchanged:  {'yes' if report['database_unchanged'] else 'NO - CHECK TABLE COUNTS'}")
     summary["lines"] = lines
     return summary
@@ -614,7 +688,9 @@ def build_summary(report, judged: bool) -> dict:
 
 def build_markdown(report, judged: bool) -> str:
     s = report["summary"]
-    md = [f"# Evaluation report ({report['question_set']} set)", "", f"Run at {report['run_at']}", "", "## Summary", ""]
+    md = [f"# Evaluation report ({report['question_set']} set)", "", f"Run at {report['run_at']}"
+          + (f", dataset: {report['dataset']}" if report.get("dataset", "rides") != "rides" else ""),
+          "", "## Summary", ""]
     md += [f"- {line}" for line in s["lines"]]
 
     if s.get("by_category"):
@@ -637,6 +713,12 @@ def build_markdown(report, judged: bool) -> str:
                 row += f" {'✅' if e.get('answer_correct') else '❌'} |"
             row += f" {e.get('retries', 0)} | {e.get('seconds', '-')} |"
             md.append(row)
+
+        retried = [e for e in report["sql"] if e.get("retry_reasons")]
+        if retried:
+            md += ["", "## Retries", ""]
+            for e in retried:
+                md.append(f"- {e['id']}: " + "; ".join(e["retry_reasons"]))
 
         failures = [e for e in report["sql"] if not e["execution_match"] or (judged and not e.get("answer_correct"))]
         if failures:

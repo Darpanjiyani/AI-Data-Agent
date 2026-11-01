@@ -13,6 +13,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.config import get_stream_writer
 from agents.etl_analyst import etl_analyst
 from agents.sql_analyst import get_loaded_tables, sql_analyst
+from utils.schema_notes import current_dataset
 
 
 llm = pick_llm("claude")
@@ -75,7 +76,13 @@ def route_question(question: str, history: str = "") -> str:
         )
     # Tables a person approved loading (e.g. daily weather): questions about them are database questions
     loaded = get_loaded_tables()
-    if loaded:
+    if loaded and not current_dataset()["loaded_data"]:
+        # Another dataset than the sample rides, e.g. the real NYC trips (EXP-16): these ARE the tables
+        prompt = (f"The database holds these tables:\n{loaded}\n"
+                  "A question about data in any of these tables is 'sql'. It's 'etl' only when the person asks "
+                  "to fetch new data from a web API or URL, to transform a file, or to load a file.\n\n"
+                  f"Message to classify:\n{prompt}")
+    elif loaded:
         prompt = (f"Besides the ride-sharing tables, the database already holds these loaded tables:\n{loaded}\n"
                   "A question about data in any of these tables is 'sql'. It's 'etl' only when the person asks "
                   "to fetch new data from a web API or URL, to transform a file, or to load a file.\n\n"
