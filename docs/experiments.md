@@ -24,6 +24,7 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 | [EXP-14 part 3](experiments-etl.md#exp-14-part-3--the-router-knows-about-loaded-tables) | 2026-10-26 | Router knows which loaded tables exist (bug found in the live demo) | routing **36/36** over 3 runs (was 15/36); other routing checks 11/11 | – | – |
 | [EXP-15](#exp-15--saying-what-the-data-cant-answer) | 2026-10-29 | Saying what the data can't answer (NOT_IN_DATA reply) | can't-answer **14/15** (was 2/15); controls 12/12; main 47/47, held-out 2 20/20, weather 11/12 | same | 5,277 (2,007 billed) on the main set |
 | [EXP-16](#exp-16--real-data-208-million-nyc-trips) | 2026-10-31 | Real data: 20.8M NYC Uber/Lyft trips; schema description from pg_stats; retry reasons in reports | NYC **27/28**⁸; main 47/47, held-out 2 20/20 | NYC **28/28** | 4,794 (2,041 billed) on NYC |
+| [EXP-17](#exp-17--no-silent-estimates-on-big-tables) | 2026-11-01 | No silent estimates: exact-only retries after a timeout, estimate labels, 60 s limit for the NYC data | heavy NYC **12/12** (was 8/12), sampled 0/12 (was 2/12); NYC 28/28, main 47/47, held-out 2 20/20 | same | 5,379 (2,483 billed) on heavy NYC |
 
 ¹ 95% as first scored; the one miss was a scoring bug (date vs midnight timestamp), fixed and re-scored.
 ² The one "incorrect" verdict was a judge error; its own reasoning found every value correct.
@@ -745,6 +746,67 @@ This finding comes from a NYC question, so the NYC set can't measure its fix fai
 ### What it means
 
 On 1,000 times more data, and on real data with odd values, the agent answered 27 of 28 questions exactly and the 28th approximately, at the same cost per question. The changes it needed were in the plumbing around the model: how the schema is described, and how slow queries are retried. Caveats: one month, one run per set, and 3 tables. A real warehouse with hundreds of tables would also need a step that picks the relevant tables first.
+
+---
+
+## EXP-17 – No silent estimates on big tables
+
+Goal: on big tables, answers must be exact, or clearly labelled when they aren't. In EXP-16 a median query on 20.8M rows hit the 15-second limit, and the retry read a random 5% of the table (`TABLESAMPLE SYSTEM (5)`) and gave the result as the median.
+
+### Tests first
+
+That finding came from a NYC question, so the NYC set can't measure the fix fairly. `evals/nyc_heavy_questions.json` was written on 2026-11-01, before any change, under the held-out rule. It has 12 questions that are slow on 20.8M rows and need an exact answer:
+- 5 percentiles: median fare, 90th percentile of trip time, median tip, median distance per company, median fare per borough. Both `PERCENTILE_CONT` and `PERCENTILE_DISC` are accepted.
+- 2 distinct counts, 1 big join (the top 5 zone-to-zone trips), 2 hourly buckets, 1 per-borough comparison, 1 standard deviation.
+
+New in every report, without the judge: how many queries read only a sample of a table (`TABLESAMPLE` or `random()` in the SQL), and how many of those answers didn't say it was an estimate (no "estimate", "approximate" or "sample").
+
+### Baseline (2026-11-01)
+
+8/12 exact. Every miss came from the 15-second limit:
+- 10 of 11 retries were timeouts (and 1 invalid SQL).
+- hv01 (median fare) and hv02 (90th percentile of trip time) were rewritten to read a 5% sample after the timeout. hv01 gave 20.15 instead of 20.12, and its answer didn't say it was an estimate.
+- hv04 (median per company) and hv11 (per-borough comparison) still timed out after their retries.
+- 36.6 s per question, and 3,556 billed input tokens per question: the retries cost tokens too.
+
+### Changes
+
+| # | Change | Targets |
+|---|---|---|
+| 1 | A time limit per dataset: 60 s for the NYC data, set on the agent's own connection. The sample data keeps the read-only user's 15 s, so the live demo doesn't change. The agent's SQL can't change the limit (the guard blocks `set_config`). | Timeouts on queries that just need longer |
+| 2 | After a timeout, the retry step is told to write a faster query that returns exactly the same result over every matching row: no `TABLESAMPLE`, no `random()`, no approximations, and aggregate the big table before joining small ones | Sampled rewrites |
+| 3 | SQL rule 10: compute exact results over every matching row, unless the user asks for an estimate | Sampling in the first query |
+| 4 | If the SQL reads a sample anyway, the answer step is told to say clearly that the result is an estimate based on a sample | Silent estimates |
+| 5 | The report labels say "Timed out" and "timeout (the time limit)", since the limit is no longer always 15 s | Reporting |
+
+### Results (2026-11-01, one run each)
+
+| Metric | Before | After |
+|---|:---:|:---:|
+| Heavy NYC questions exact | 8/12 | 12/12 |
+| Queries that read only a sample | 2/12 | 0/12 |
+| Final queries stopped by the time limit | 2/12 | 0/12 |
+| Retries (all timeouts) | 8 questions, 10 timeouts | 2 questions, 2 timeouts, both rewritten exactly |
+| Time per question | 36.6 s | 40.7 s |
+| Billed input tokens per question | 3,556 | 2,483 |
+
+Regression checks with the fix:
+
+| Set | Execution | Answer | Notes |
+|---|:---:|:---:|---|
+| NYC (28) | 28/28 | 28/28 | n22, the median that was sampled in EXP-16, is now exact with no retry (24 s) |
+| Main (47) | 47/47 | 47/47 | 2,009 billed input tokens per question (2,007 before) |
+| Held-out 2 (20) | 20/20 | 20/20 | |
+
+### Findings
+
+1. The time limit was the root cause. With 60 s, 10 of the 12 heavy questions finished on the first try. The 15 s limit protects a shared database; for a 20.8M-row table on a laptop it was too tight for a median, and the agent "solved" it by sampling.
+2. Exact-only retries work. The 2 questions that still timed out at 60 s (hv06, distinct zone pairs; hv11, per-borough comparison) were rewritten to faster exact queries and answered correctly.
+3. The estimate label was never needed in this run, because no query sampled. It's a safety net, checked only offline so far.
+4. Correct is slower. Answers took 40.7 s on average (up to 116 s for hv11), against 36.6 s before. Fewer retries made each question cheaper: 2,483 billed input tokens, against 3,556.
+5. Nothing changed for the sample data: main and held-out 2 stayed at 100%, at the same cost.
+
+Caveats: one run per set. The 60 s limit suits this laptop and this table; a bigger table, or a slower machine, could need indexes or pre-aggregated tables instead of a longer limit. The NYC set had informed this fix (n22), so its 28/28 is a regression check, not an independent result.
 
 ---
 

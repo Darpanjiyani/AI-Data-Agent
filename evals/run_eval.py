@@ -26,6 +26,7 @@ Usage (from the project root):
   uv run evals/run_eval.py --set routing      # routing only: loaded weather (sql) vs fetching new data (etl)
   uv run evals/run_eval.py --set unanswerable # questions the data can't answer + look-alike controls (EXP-15)
   uv run evals/run_eval.py --set nyc          # 20.8M real NYC Uber/Lyft trips (EXP-16; needs utils/load_nyc_trips.py)
+  uv run evals/run_eval.py --set nyc_heavy    # slow NYC questions: percentiles, distinct counts, big joins (EXP-17)
   uv run evals/run_eval.py --ids s01 j07      # specific questions
   uv run evals/run_eval.py --category join    # one category
   uv run evals/run_eval.py --no-judge         # skip the LLM judge (cheaper)
@@ -72,11 +73,16 @@ QUESTION_SETS = {
     "unanswerable": PROJECT_ROOT / "evals" / "unanswerable_questions.json",
     # Real NYC Uber/Lyft trips, one month, 20.8M rows (EXP-16). Runs the agent with AGENT_DATASET=nyc. Same rule.
     "nyc": PROJECT_ROOT / "evals" / "nyc_questions.json",
+    # Slow questions on the NYC trips: percentiles, distinct counts, big joins (EXP-17 check set). Same rule.
+    "nyc_heavy": PROJECT_ROOT / "evals" / "nyc_heavy_questions.json",
 }
 # Reference results for sets whose reference queries are slow (big tables), saved after the first run
 ANSWER_KEYS_DIR = PROJECT_ROOT / "evals" / "answer_keys"
 REFERENCE_TIMEOUT = "600s"   # reference queries only; the agent keeps the read-only user's 15 s limit
 RESULTS_DIR = PROJECT_ROOT / "evals" / "results"
+# EXP-17: queries that read only part of a table, and answers that admit to being an estimate
+SAMPLING = re.compile(r"\bTABLESAMPLE\b|\brandom\s*\(", re.IGNORECASE)
+ESTIMATE_WORDS = re.compile(r"estimat|approximat|sampl", re.IGNORECASE)
 TABLES_TO_WATCH = ["users", "vehicles", "rides", "payments", "ratings",
                    "external.weather_daily"]   # EXP-14: loaded weather (if it exists yet)
 DATASET_TABLES = {"nyc": ["nyc.trips", "nyc.zones", "nyc.companies"]}   # EXP-16
@@ -281,7 +287,7 @@ def retry_reason(last: dict) -> str:
     if last.get("result_issue"):
         return f"result check: {last['result_issue'][:150]}"
     if "statement timeout" in result:
-        return "timeout (the 15 s limit)"
+        return "timeout (the time limit)"
     if result.startswith("Error"):
         return f"database error: {result.removeprefix('Error executing query: ')[:150]}"
     return "unknown"
@@ -469,6 +475,9 @@ def main():
                 matched, reason = False, run["result"]
             entry["execution_match"] = matched
             entry["execution_reason"] = reason
+            # EXP-17: did the agent read only a sample of the table, and did the answer say so?
+            entry["sampled"] = bool(SAMPLING.search(run["generated_sql"]))
+            entry["labelled_estimate"] = entry["sampled"] and bool(ESTIMATE_WORDS.search(run["final_answer"]))
 
             if judge:
                 correct, why = judge_answer(judge, q["question"], reference_text, run["final_answer"], q.get("notes", ""))
@@ -619,10 +628,16 @@ def build_summary(report, judged: bool) -> dict:
                 lines.append(f"Prompt cache:        {pct(read, total_in)} of input tokens read from cache; "
                              f"billed input = {billed:,.0f} normal-price tokens per question")
 
-            # Queries stopped by the read-only user's 15-second limit (EXP-16: big tables)
+            # Queries stopped by the time limit (15 s, or the dataset's own limit: EXP-16, EXP-17)
             timeouts = [e for e in sql if "statement timeout" in str(e.get("result", ""))]
             summary["timeouts"] = len(timeouts)
-            lines.append(f"Timed out (15 s):    {len(timeouts)}/{len(sql)} final queries hit the time limit")
+            lines.append(f"Timed out:           {len(timeouts)}/{len(sql)} final queries hit the time limit")
+
+            sampled = [e for e in sql if e.get("sampled")]
+            labelled = sum(bool(e.get("labelled_estimate")) for e in sampled)
+            summary.update({"sampled": len(sampled), "silent_estimates": len(sampled) - labelled})
+            lines.append(f"Sampled data:        {len(sampled)}/{len(sql)} queries read only a sample "
+                         f"(TABLESAMPLE/random); {len(sampled) - labelled} of them didn't say it was an estimate")
 
             retried = [e for e in timed if e.get("retries", 0) > 0]
             recovered = [e for e in retried if e["execution_match"]]

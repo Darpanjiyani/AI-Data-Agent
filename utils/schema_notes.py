@@ -67,11 +67,12 @@ NYC_NOTES = """
 """.strip()
 
 DATASETS = {
+    # query_timeout: the agent's time limit per query; None keeps the read-only user's 15 s (EXP-17)
     "rides": {"schema": "public", "tables": AGENT_TABLES, "notes": DATA_NOTES, "qualify_names": False,
-              "loaded_data": True,
+              "loaded_data": True, "query_timeout": None,
               "covers": "riders and drivers, their vehicles, rides, payments and ratings"},
     "nyc": {"schema": "nyc", "tables": ["trips", "zones", "companies"], "notes": NYC_NOTES,
-            "qualify_names": True, "loaded_data": False,
+            "qualify_names": True, "loaded_data": False, "query_timeout": "60s",
             "covers": "Uber and Lyft trips in New York City in June 2026, the taxi zones and the companies"},
 }
 

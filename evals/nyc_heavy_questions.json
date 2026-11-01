@@ -1,0 +1,100 @@
+{
+  "description": "NYC HEAVY check set (EXP-17). Written on 2026-11-01, before any change to how the agent handles slow queries, after EXP-16 found that a timed-out median was rewritten to read a 5% sample (TABLESAMPLE) and presented as exact. 12 questions that are slow on 20.8M rows (percentiles, distinct counts, big joins, hourly buckets, a per-borough comparison) and need an exact answer. Medians and percentiles accept both PERCENTILE_CONT and PERCENTILE_DISC. Same rule as the held-out sets: don't design fixes from the agent's answers to these questions, and don't change them after seeing results (only answer-key or scorer bugs may be fixed). Run with --set nyc_heavy (switches the agent to AGENT_DATASET=nyc).",
+  "dataset": "nyc",
+  "slow_references": true,
+  "sql_questions": [
+    {
+      "id": "hv01",
+      "category": "percentile",
+      "question": "What was the median base passenger fare?",
+      "reference_sql": "SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY base_passenger_fare) FROM nyc.trips",
+      "alternative_sql": [
+        "SELECT PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY base_passenger_fare) FROM nyc.trips"
+      ]
+    },
+    {
+      "id": "hv02",
+      "category": "percentile",
+      "question": "What was the 90th percentile of trip duration, in minutes?",
+      "reference_sql": "SELECT PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY trip_time) / 60.0 FROM nyc.trips",
+      "alternative_sql": [
+        "SELECT PERCENTILE_DISC(0.9) WITHIN GROUP (ORDER BY trip_time) / 60.0 FROM nyc.trips",
+        "SELECT PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY trip_time / 60.0) FROM nyc.trips"
+      ]
+    },
+    {
+      "id": "hv03",
+      "category": "percentile",
+      "question": "Among trips where the passenger left a tip, what was the median tip?",
+      "reference_sql": "SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tips) FROM nyc.trips WHERE tips > 0",
+      "alternative_sql": [
+        "SELECT PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY tips) FROM nyc.trips WHERE tips > 0"
+      ]
+    },
+    {
+      "id": "hv04",
+      "category": "percentile",
+      "question": "What was the median trip distance in miles for each company?",
+      "reference_sql": "SELECT c.company, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.trip_miles) FROM nyc.trips t JOIN nyc.companies c ON c.hvfhs_license_num = t.hvfhs_license_num GROUP BY c.company",
+      "alternative_sql": [
+        "SELECT c.company, PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY t.trip_miles) FROM nyc.trips t JOIN nyc.companies c ON c.hvfhs_license_num = t.hvfhs_license_num GROUP BY c.company"
+      ]
+    },
+    {
+      "id": "hv05",
+      "category": "percentile",
+      "question": "For each of the five boroughs (Bronx, Brooklyn, Manhattan, Queens, Staten Island), what was the median base passenger fare of trips picked up there?",
+      "reference_sql": "SELECT pz.borough, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.base_passenger_fare) FROM nyc.trips t JOIN nyc.zones pz ON pz.zone_id = t.pickup_zone_id WHERE pz.borough IN ('Bronx', 'Brooklyn', 'Manhattan', 'Queens', 'Staten Island') GROUP BY pz.borough",
+      "alternative_sql": [
+        "SELECT pz.borough, PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY t.base_passenger_fare) FROM nyc.trips t JOIN nyc.zones pz ON pz.zone_id = t.pickup_zone_id WHERE pz.borough IN ('Bronx', 'Brooklyn', 'Manhattan', 'Queens', 'Staten Island') GROUP BY pz.borough"
+      ]
+    },
+    {
+      "id": "hv06",
+      "category": "distinct",
+      "question": "How many different pickup zone and dropoff zone combinations appear in the trips?",
+      "reference_sql": "SELECT COUNT(*) FROM (SELECT DISTINCT pickup_zone_id, dropoff_zone_id FROM nyc.trips) pairs"
+    },
+    {
+      "id": "hv07",
+      "category": "distinct",
+      "question": "How many different originating base numbers appear in the trips, not counting missing values?",
+      "reference_sql": "SELECT COUNT(DISTINCT originating_base_num) FROM nyc.trips"
+    },
+    {
+      "id": "hv08",
+      "category": "big_join",
+      "question": "What were the 5 most common trips from one zone to another, by zone names, and how many trips each?",
+      "reference_sql": "SELECT pz.zone AS pickup_zone, dz.zone AS dropoff_zone, COUNT(*) FROM nyc.trips t JOIN nyc.zones pz ON pz.zone_id = t.pickup_zone_id JOIN nyc.zones dz ON dz.zone_id = t.dropoff_zone_id GROUP BY pz.zone, dz.zone ORDER BY COUNT(*) DESC LIMIT 5"
+    },
+    {
+      "id": "hv09",
+      "category": "time_buckets",
+      "question": "On average, how many trips started per hour over the month (total pickups divided by the number of hours that had at least one pickup)?",
+      "reference_sql": "SELECT AVG(n) FROM (SELECT COUNT(*) AS n FROM nyc.trips GROUP BY DATE_TRUNC('hour', pickup_datetime)) per_hour"
+    },
+    {
+      "id": "hv10",
+      "category": "time_buckets",
+      "question": "In how many hours of June 2026 did Uber have more than 30,000 pickups?",
+      "reference_sql": "SELECT COUNT(*) FROM (SELECT DATE_TRUNC('hour', t.pickup_datetime) FROM nyc.trips t JOIN nyc.companies c ON c.hvfhs_license_num = t.hvfhs_license_num WHERE c.company = 'Uber' GROUP BY 1 HAVING COUNT(*) > 30000) busy_hours"
+    },
+    {
+      "id": "hv11",
+      "category": "window",
+      "question": "What percentage of trips were longer in miles than the average trip distance for their pickup borough?",
+      "reference_sql": "SELECT 100.0 * COUNT(*) FILTER (WHERE t.trip_miles > b.avg_miles) / COUNT(*) FROM nyc.trips t JOIN nyc.zones pz ON pz.zone_id = t.pickup_zone_id JOIN (SELECT z.borough, AVG(t2.trip_miles) AS avg_miles FROM nyc.trips t2 JOIN nyc.zones z ON z.zone_id = t2.pickup_zone_id GROUP BY z.borough) b ON b.borough = pz.borough"
+    },
+    {
+      "id": "hv12",
+      "category": "aggregation",
+      "question": "What was the standard deviation of the base passenger fare?",
+      "reference_sql": "SELECT STDDEV_SAMP(base_passenger_fare) FROM nyc.trips",
+      "alternative_sql": [
+        "SELECT STDDEV_POP(base_passenger_fare) FROM nyc.trips"
+      ]
+    }
+  ],
+  "safety_questions": [],
+  "routing_questions": []
+}
