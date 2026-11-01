@@ -51,14 +51,53 @@ def _unique_column_names(columns: list) -> list:
 
 class DatabaseUtil:
 
-    def __init__(self, db_config: dict):
+    def __init__(self, db_config: dict, statement_timeout: str | None = None):
         self.db_config = db_config
+        # e.g. "600s" for the eval's reference queries on big tables (EXP-16). The agent never sets it,
+        # so it keeps the read-only user's 15-second limit.
+        self.statement_timeout = statement_timeout
 
     def _connect(self):
         """Open a new read-only connection."""
         connection = psycopg2.connect(**self.db_config)
         connection.set_session(readonly=True)  # extra layer on top of the read-only user
+        if self.statement_timeout:
+            with connection.cursor() as cursor:
+                cursor.execute("SET statement_timeout = %s", (self.statement_timeout,))
         return connection
+
+    # Above this many rows (planner estimate), allowed values come from pg_stats, not a full scan (EXP-16).
+    # The sample ride tables are far below it, so their description is built exactly as before.
+    BIG_TABLE_ROWS = 1_000_000
+
+    @staticmethod
+    def _values_from_statistics(cursor, schema_name, table_name, column_name, max_listed_values):
+        """
+        A column's values from pg_stats, gathered by ANALYZE. Returns the list of values (with None
+        for NULL) when the statistics say the column has at most max_listed_values values and list
+        them all; a list longer than max_listed_values when it clearly has more; None when the
+        statistics can't tell (then the caller scans the column as before).
+        """
+        cursor.execute(
+            """
+            SELECT n_distinct, null_frac, most_common_vals::text::text[]
+            FROM pg_stats
+            WHERE schemaname = %s AND tablename = %s AND attname = %s
+            """,
+            (schema_name, table_name, column_name),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        n_distinct, null_frac, common = row
+        if n_distinct is None:
+            return None
+        if n_distinct < 0 or n_distinct > max_listed_values:
+            return [None] * (max_listed_values + 1)   # many values (n_distinct < 0 = grows with the table)
+        common = list(common or [])
+        if len(common) != int(n_distinct):
+            return None                               # the statistics don't list every value
+        return common + ([None] if null_frac and null_frac > 0 else [])
 
     def schema_details(
         self,
@@ -124,18 +163,31 @@ class DatabaseUtil:
                     )
                     columns = cursor.fetchall()
 
+                    # The planner's row estimate (no scan); -1 or 0 if the table was never analysed
+                    cursor.execute("SELECT reltuples FROM pg_class WHERE oid = %s::regclass",
+                                   (f'"{schema_name}"."{table_name}"',))
+                    found = cursor.fetchone()
+                    big_table = bool(found) and found[0] >= self.BIG_TABLE_ROWS
+
                     for column_name, data_type in columns:
                         line = f"  - {column_name} ({data_type})"
 
                         # List the values of short text columns so the LLM uses exact spellings
                         if data_type in ("character varying", "text") and column_name not in masked_columns:
-                            cursor.execute(
-                                sql.SQL("SELECT DISTINCT {} FROM {} LIMIT %s").format(
-                                    sql.Identifier(column_name), table_id
-                                ),
-                                (max_listed_values + 1,),
-                            )
-                            values = [row[0] for row in cursor.fetchall()]
+                            values = None
+                            if big_table:
+                                # EXP-16: on a big table, read the values from PostgreSQL's statistics
+                                # instead of scanning every row (the scans took 43 s on 20.8M trips)
+                                values = self._values_from_statistics(cursor, schema_name, table_name,
+                                                                      column_name, max_listed_values)
+                            if values is None:
+                                cursor.execute(
+                                    sql.SQL("SELECT DISTINCT {} FROM {} LIMIT %s").format(
+                                        sql.Identifier(column_name), table_id
+                                    ),
+                                    (max_listed_values + 1,),
+                                )
+                                values = [row[0] for row in cursor.fetchall()]
                             if len(values) <= max_listed_values:
                                 shown = sorted(repr(v) if v is not None else "NULL" for v in values)
                                 line += f" values: {', '.join(shown)}"

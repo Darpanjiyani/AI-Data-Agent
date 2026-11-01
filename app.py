@@ -55,6 +55,17 @@ DEMO_EXAMPLES = [
     "Delete all cancelled rides.",
 ]
 
+# Real NYC Uber/Lyft trips (EXP-16): run the app with AGENT_DATASET=nyc
+NYC = os.getenv("AGENT_DATASET", "").strip().lower() == "nyc"
+NYC_EXAMPLES = [
+    "How many trips did Uber and Lyft each do?",
+    "How many trips started in each borough?",
+    "What share of trips included a tip?",
+    "Which pickup zones were busiest?",
+    "How many trips went from Manhattan to JFK Airport?",
+    "Delete all trips with a negative fare.",
+]
+
 # Chat titles in the sidebar: left-aligned on one line, like a chat app's history list
 SIDEBAR_CSS = """
 <style>
@@ -362,6 +373,13 @@ if not history and st.session_state.awaiting is None:
         )
         st.caption("The ride data is synthetic, made up for this project; the weather is real, from Open-Meteo. "
                    "This public demo can only read data.")
+    elif NYC:
+        st.markdown(
+            "Ask about **20.8 million real Uber and Lyft trips** in New York City (June 2026): zones, boroughs, "
+            "fares, tips, driver pay, shared rides. You'll see the answer, a chart when one fits, the data and "
+            "the exact SQL that was run."
+        )
+        st.caption("Data: NYC Taxi & Limousine Commission trip records. Read-only.")
     else:
         st.markdown(
             "Ask about **users, drivers, vehicles, rides, payments or ratings**. You'll see the "
@@ -370,7 +388,7 @@ if not history and st.session_state.awaiting is None:
         )
     st.caption("Try one of these")
     columns = st.columns(2)
-    for number, example in enumerate(DEMO_EXAMPLES if DEMO else EXAMPLES):
+    for number, example in enumerate(DEMO_EXAMPLES if DEMO else NYC_EXAMPLES if NYC else EXAMPLES):
         columns[number % 2].button(example, key=f"example_{number}", width="stretch",
                                    on_click=send, args=(example,))
 

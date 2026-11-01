@@ -23,6 +23,7 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 | [EXP-14 part 2](experiments-etl.md#exp-14-part-2--the-sql-agent-reads-loaded-tables) | 2026-10-23 | SQL agent reads loaded tables (external schema) | weather set **11/12**⁷ (was 0/12); main **47/47** | weather **11/12**; main **100%** | 5,104 (**1,878 billed**) |
 | [EXP-14 part 3](experiments-etl.md#exp-14-part-3--the-router-knows-about-loaded-tables) | 2026-10-26 | Router knows which loaded tables exist (bug found in the live demo) | routing **36/36** over 3 runs (was 15/36); other routing checks 11/11 | – | – |
 | [EXP-15](#exp-15--saying-what-the-data-cant-answer) | 2026-10-29 | Saying what the data can't answer (NOT_IN_DATA reply) | can't-answer **14/15** (was 2/15); controls 12/12; main 47/47, held-out 2 20/20, weather 11/12 | same | 5,277 (2,007 billed) on the main set |
+| [EXP-16](#exp-16--real-data-208-million-nyc-trips) | 2026-10-31 | Real data: 20.8M NYC Uber/Lyft trips; schema description from pg_stats; retry reasons in reports | NYC **27/28**⁸; main 47/47, held-out 2 20/20 | NYC **28/28** | 4,794 (2,041 billed) on NYC |
 
 ¹ 95% as first scored; the one miss was a scoring bug (date vs midnight timestamp), fixed and re-scored.
 ² The one "incorrect" verdict was a judge error; its own reasoning found every value correct.
@@ -31,6 +32,7 @@ Every change to the agent is recorded here: what was changed, why, how it was me
 ⁵ Final version: check set run 3 times; fresh and original follow-up sets once; main and held-out sets once after part 1 (part 2 doesn't change single-question SQL) and routing re-checked after part 2. All 16 follow-up change requests were clearly refused.
 ⁶ h06 is the question that failed in 3 of the 6 main-set runs before this change. In these runs the sanity check caught its wrong-shape query twice (once in the 5 solo runs, once in the main run) and the rewritten query was correct both times.
 ⁷ 10/12 as first scored; wq06 was correct (a midnight timestamp with a time zone, which the scorer now accepts). The one real miss, wq12, used payments and the drop-off date.
+⁸ The baseline was also 27/28 as first scored; its miss, n11, was an answer-key bug (see EXP-16). The miss after the fix, n22, used a 5% sample after a timeout.
 
 ---
 
@@ -661,6 +663,88 @@ The weather miss is wq12, the same miss as in EXP-14 (it used payments and the d
 6. After the results, a small formatting fix was made: a missing-data sentence ending in a quote no longer gets a second full stop ("heavy-traffic days.".). It changes no verdict.
 
 Caveat: one run per set. The 15 questions cover 6 kinds of missing data, so 14/15 is a measure of these kinds, not a guarantee for every question.
+
+---
+
+## EXP-16 – Real data: 20.8 million NYC trips
+
+Goal: check whether the agent still works on real, large data, not only on the 20,000-ride sample it was built on. The data is one month of the NYC Taxi & Limousine Commission's high volume for-hire trip records: every Uber and Lyft trip in New York City with a pickup in June 2026, 20,775,868 rows. That's about 1,000 times the sample.
+
+### Setup
+
+- `utils/load_nyc_trips.py` downloads the month's Parquet file (507 MB) and the taxi zone table, and loads them into a separate `nyc` schema with PostgreSQL `COPY`, reading the file 250,000 rows at a time. On the laptop the load took 7.7 minutes, and `nyc.trips` is 4 GB. It creates no indexes, so the agent is measured on the raw table. `agent_reader` gets read access; the agent still connects only as that user.
+- `utils/profile_nyc.py` profiled the data before any question was written:
+  - One full scan takes 3–6 s, and `COUNT(DISTINCT ...)` on two columns took 46 s.
+  - Only Uber (15.3M trips) and Lyft (5.5M) appear.
+  - 6,750 fares are negative, and 260,908 trips have a request time after the pickup time.
+  - No missing zones, and no nulls in the money columns.
+- A dataset setting, `AGENT_DATASET` (`rides` by default, or `nyc`), picks the schema, tables and data notes. The agent code is the same for both. The NYC data notes were written from the TLC data dictionary and the profile.
+- `evals/nyc_questions.json` was written on 2026-10-31, after profiling and before the agent was run on the data, under the held-out rule. It has:
+  - 28 questions: 4 simple, 6 aggregation, 5 zone joins, 4 date, 2 tricky, 7 hard (median, busiest day, top drop-off zones from JFK, tip rates).
+  - 2 change requests and 3 questions the data can't answer.
+- The eval runner:
+  - `--set nyc` switches the agent to the NYC data.
+  - Reference queries get a 10-minute limit (the agent keeps 15 seconds), and their results are saved in `evals/answer_keys/nyc.json`.
+  - Reports now count queries that hit the time limit and show how long the schema description took to build.
+
+### Baseline (2026-10-31)
+
+| Metric | Sample data (main set) | NYC, 20.8M rows |
+|---|:---:|:---:|
+| Strict accuracy | 47/47 | 27/28 (28/28 after an answer-key fix) |
+| Judge accuracy | 47/47 | 28/28 |
+| Time per question | 5.5 s | 10.9 s |
+| Billed input tokens per question | 2,007 | 2,104 |
+| Schema description built in | under 1 s | 42.7 s |
+| Final queries stopped by the 15 s limit | 0 | 0 (3 questions needed a retry) |
+| Change requests refused / can't-answer passed | 4/4 / – | 2/2 / 3/3 |
+
+The strict miss, n11, was an answer-key bug. The question said "keeping every borough value in the zones table", and the agent did exactly that: it included two boroughs with 0 trips. The judge agreed it was correct. Its reading was added as an accepted answer.
+
+### Findings that led to changes
+
+1. Cost doesn't grow with data size. The model only reads the schema and small results, never the table, so tokens per question stayed the same at 1,000 times the rows.
+2. The schema description took 42.7 s. To list the allowed values of each short text column (Y/N flags, company codes), the agent ran `SELECT DISTINCT` on 20.8M rows, once per column. In the app, the first question after a start would wait that long.
+3. The report showed that 3 questions needed a retry, but not why.
+
+### Changes
+
+| # | Change | Targets |
+|---|---|---|
+| 1 | On tables over 1 million rows (the planner's estimate in `pg_class`, so no scan), read a column's values from PostgreSQL's statistics (`pg_stats`) instead of scanning. Use them only when the statistics list every value; otherwise scan as before. Smaller tables, including all the sample data, are described exactly as before. | Schema build time |
+| 2 | The eval streams each run step by step and records why every retry happened: timeout, database error, result check or invalid SQL | Seeing the cause of retries |
+| 3 | n11: the agent's reading (boroughs with 0 trips included) is accepted | Answer-key bug |
+
+Checked offline: on a test table the statistics give exactly the same schema text as the scan. The text for the sample rides and the weather table is identical to before.
+
+### Results (2026-10-31, one run each)
+
+| Metric | Baseline | After |
+|---|:---:|:---:|
+| NYC strict accuracy | 27/28 (n11, key bug) | 27/28 (n22) |
+| NYC judge accuracy | 28/28 | 28/28 |
+| Schema description built in | 42.7 s | 0.1 s |
+| Time per question | 10.9 s | 10.5 s |
+| Billed input tokens per question | 2,104 | 2,041 |
+| Why retried | not recorded | 2 timeouts (n11, n22) |
+| Main set / held-out 2 (regression) | 47/47 / 20/20 (EXP-15) | 47/47 / 20/20 |
+
+### A new problem: silent sampling
+
+n22 asks for the median trip distance. The exact query hit the 15-second limit, and the retry rewrote it as:
+
+```sql
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY trip_miles) AS median_trip_miles
+FROM nyc.trips TABLESAMPLE SYSTEM (5);
+```
+
+That's the median of a random 5% of the trips, and the answer gave it as the median ("2.9 miles"; the exact value is 2.91). The judge accepted it as rounding; the strict check caught it. On the sample data this couldn't happen. On a big table, under the time limit, the agent switched to an estimate without telling the user. In the baseline run the same question needed a retry too, and its rewrite happened to be exact.
+
+This finding comes from a NYC question, so the NYC set can't measure its fix fairly. EXP-17 will write new heavy questions first (percentiles, distinct counts, big joins), run a baseline, and then try: exact-only rewrites after a timeout, a clear label on any estimate, and a time limit per dataset.
+
+### What it means
+
+On 1,000 times more data, and on real data with odd values, the agent answered 27 of 28 questions exactly and the 28th approximately, at the same cost per question. The changes it needed were in the plumbing around the model: how the schema is described, and how slow queries are retried. Caveats: one month, one run per set, and 3 tables. A real warehouse with hundreds of tables would also need a step that picks the relevant tables first.
 
 ---
 

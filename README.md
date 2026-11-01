@@ -128,6 +128,7 @@ The project ships with a synthetic ride-sharing dataset (users, vehicles, rides,
 - Uses prompt caching: the instructions, data notes and schema are identical for every question, so they are sent as a cached block that Claude reads at a tenth of the normal input price after the first question.
 - Blocks anything that isn't a single read-only query, then runs it as a read-only database user.
 - Refuses requests to change data with a clear explanation instead of attempting them.
+- Works on real, large data (EXP-16): set `AGENT_DATASET=nyc` and the same agent answers questions about one month of real NYC Uber and Lyft trips (20.8 million rows) instead of the sample data. On a 28-question set it scored 27/28 on the strict check and 28/28 from the judge, at the same token cost per question as on the sample data.
 - Says what the data can't answer (EXP-15): asked for something the database doesn't have (a tip, a driver's age, a city with no weather), it replies "I can't answer that from the data I have", names what's missing and lists what it can answer. If part of a question can be answered, it answers that part and says which part it can't. It no longer answers a different question instead, such as reporting total fares as "commission".
 - Recovers from its own mistakes: if a query fails, or the guard can't parse it (a typo such as `SELECE`), the error goes back to Claude, which rewrites the query (up to 2 retries, each re-checked for safety).
 - Checks that a successful result fits the question: if a question asks for one number ("How many users...?") but the query returns many rows, for example a `COUNT` inside a `GROUP BY`, the query is rewritten within the same retry limit. The check is rule-based, so it adds no model call when the result is fine.
@@ -286,6 +287,28 @@ https://archive-api.open-meteo.com/v1/archive?latitude=43.65,45.50,45.42,53.55,4
 
 The ETL agent downloads 576 days for each city from [Open-Meteo](https://open-meteo.com/) (free, no API key, CC BY 4.0), shapes it into one row per city per day (4,608 rows) and prepares the load. Check the card (8 cities, `date` as a date) and click **Approve load**.
 
+### 7. Try it on real NYC data (optional)
+
+One month of real NYC Uber and Lyft trips (the NYC Taxi & Limousine Commission's [trip record data](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page), about 20.8 million rows) can be loaded into a separate `nyc` schema. It needs about 10 GB of free disk space and takes about 8 minutes:
+
+```bash
+uv run python utils/load_nyc_trips.py --month 2026-06   # downloads to data/nyc/ (git-ignored), loads with COPY
+uv run python utils/profile_nyc.py                      # optional: nulls, odd values, scan times
+```
+
+Then run the app or the eval on it:
+
+```bash
+# Windows PowerShell
+$env:AGENT_DATASET="nyc"; uv run streamlit run app.py
+# macOS / Linux
+AGENT_DATASET=nyc uv run streamlit run app.py
+
+uv run evals/run_eval.py --set nyc        # switches to the NYC data by itself
+```
+
+The live demo stays on the sample data: the free cloud database holds 1 GB, and this table is 4 GB.
+
 Something not working? See [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ---
@@ -361,6 +384,7 @@ uv run evals/run_eval.py --set holdout       # held-out questions (see below)
 uv run evals/run_eval.py --set holdout2      # second held-out set (see below)
 uv run evals/run_eval.py --set weather       # weather + rides questions (needs external.weather_daily)
 uv run evals/run_eval.py --set unanswerable  # questions the data can't answer + look-alike controls (EXP-15)
+uv run evals/run_eval.py --set nyc           # 20.8M real NYC trips (EXP-16; see "Try it on real NYC data")
 uv run evals/run_followup_eval.py            # follow-up conversations (see below)
 uv run evals/run_followup_eval.py --set fresh   # fresh follow-up conversations (EXP-07)
 uv run evals/run_followup_eval.py --set check   # final check conversations (EXP-07)
@@ -387,6 +411,9 @@ In EXP-07 one held-out question (o14) showed the same weakness as a follow-up co
 
 ### Questions the data can't answer
 `evals/unanswerable_questions.json` (EXP-15) holds 15 questions the database can't answer (12 not at all, 3 only in part) and 12 look-alike questions it can, as controls. Each unanswerable question has a note saying what's missing. An LLM judge checks that the reply says what's missing and doesn't present a result for a different question as the answer; the runner also records whether a query ran and whether the user saw a guard message. The controls catch a fix that refuses too much. Written before the fix, under the held-out rule.
+
+### Real NYC data
+`evals/nyc_questions.json` (EXP-16) holds 28 questions about one month of real NYC Uber and Lyft trips (20.8 million rows), plus 2 change requests and 3 questions the data can't answer. It was written after profiling the data and before the agent was run on it, under the held-out rule. The reference queries take seconds each on 20.8M rows, so they get a 10-minute limit (the agent keeps 15 seconds) and their results are saved in `evals/answer_keys/nyc.json`. Reports for every set now show how many queries hit the time limit, why each retry happened (timeout, database error, result check, invalid SQL) and how long the schema description took to build.
 
 ### Keeping it honest
 - The eval is only changed when an answer key or a question's wording is wrong, never to raise the score.
@@ -421,11 +448,14 @@ In EXP-07 one held-out question (o14) showed the same weakness as a follow-up co
 | v2.6 | Same version, main set (regression check) | **100%** | **100%** | 5,104 (**1,878 billed**) | 5.9 s |
 | v2.7 | EXP-15: says what the data can't answer; **can't-answer set** (15 questions, 2/15 before) | 14/15 passed⁴; controls **12/12** | – | 5,212 (2,209 billed) | 5.1 s |
 | v2.7 | Same version, main set / second held-out set / weather set (regression checks) | **100%** / **100%** / 91.7% | same | 5,277 (**2,007 billed**) on the main set | 5.5 s |
+| v2.8 | EXP-16: **real NYC data**, 20.8M Uber/Lyft trips (28 questions written before the first run) | 96.4% (27/28)⁵ | **100%** | 4,794 (2,041 billed) | 10.5 s |
+| v2.8 | Same version, main set / second held-out set (regression checks) | **100%** / **100%** | **100%** | 5,276 (**2,007 billed**) on the main set | 5.3 s |
 
 ¹ The one miss is h06, the same occasional mistake seen before caching; see [EXP-08](docs/experiments.md#exp-08--prompt-caching). Billed input = uncached input + 0.1 × cache reads + 1.25 × cache writes.
 ² h06 still writes the wrong-shape query sometimes (2 of 6 runs in this round), but the sanity check now catches it and the rewritten query is correct; h06 passed 5/5 when run alone. See [EXP-09](docs/experiments.md#exp-09--result-sanity-check).
 ³ 10/12 as first scored: wq06 was right but returned a midnight timestamp with a time zone, which the scorer now accepts. The miss, wq12, totalled completed payments by drop-off date instead of ride fares by request date.
 ⁴ Judged by an LLM: the reply must say what data is missing and must not answer a different question. Before the fix, 8 of 15 replies were guard errors and 2 answered a different question; after, 0 and 0. The miss, u08, asks about a date before the weather data starts; the reply says there's no data but not why. See [EXP-15](docs/experiments.md#exp-15--saying-what-the-data-cant-answer).
+⁵ The miss, n22 (the median trip distance), timed out at 15 seconds, and the retry computed the median from a 5% random sample (`TABLESAMPLE`) without saying so; the judge accepted 2.9 for 2.91. Building the schema description took 42.7 s on 20.8M rows before EXP-16's fix and 0.1 s after. See [EXP-16](docs/experiments.md#exp-16--real-data-208-million-nyc-trips).
 
 Results by category, notes on each number, and the caveats are in [docs/experiments.md](docs/experiments.md#results-by-version); every round has its own write-up there.
 
@@ -474,10 +504,13 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - [x] Retry when the guard finds invalid SQL, not only on database errors
 - [x] Show the SQL to the answer step, so a top-1 result is stated confidently
 - [x] Say what the data can't answer instead of answering a different question: 14/15, was 2/15 (EXP-15)
+- [x] Real, large data: 20.8M NYC Uber/Lyft trips, 27/28 (EXP-16)
+- [ ] No silent estimates on big tables: exact retries after a timeout, and any sample clearly labelled (EXP-17)
 
 **Cost and speed**
 - [x] Schema built once per process; SQL prompt 41% smaller
 - [x] Prompt caching for the schema context
+- [x] Schema description from PostgreSQL statistics on big tables: 42.7 s → 0.1 s on 20.8M rows (EXP-16)
 - [ ] Compare a decision model (e.g. Jev) with Sonnet for routing
 
 **Features**
@@ -503,6 +536,7 @@ Results by category, notes on each number, and the caveats are in [docs/experime
 - Answers can vary between runs: Claude Sonnet 5 thinks by default and doesn't accept a custom `temperature`, so variance is reduced with explicit rules rather than sampling settings.
 - The result check only covers questions phrased as asking for one number; a query that runs but answers a different question in some other way isn't caught.
 - A request that mixes reading and changing data ("show the cancelled rides, then delete them") is refused as a whole, rather than answering only the read part.
+- On big tables a query can hit the 15-second limit (2 of 28 NYC questions did). After a timeout the agent may rewrite the query to read a random sample and present the estimate as exact; this is the next experiment (EXP-17).
 - The agent can't see the date range of each table, so for a period the data doesn't cover it says "no data for that period" but not that the data starts later (EXP-15).
 
 ---
@@ -520,7 +554,9 @@ AI-Data-Agent/
 │   └── schema.py            # Pydantic state models
 ├── utils/
 │   ├── database.py          # Read-only connection, schema context, query runner
-│   ├── schema_notes.py      # Agent tables and data notes for the LLM
+│   ├── schema_notes.py      # Datasets (sample rides or NYC), agent tables and data notes for the LLM
+│   ├── load_nyc_trips.py    # Downloads and loads one month of real NYC Uber/Lyft trips (EXP-16)
+│   ├── profile_nyc.py       # Read-only profile of the NYC data: nulls, odd values, scan times
 │   ├── sql_guard.py         # Rule-based read-only check
 │   ├── charts.py            # Picks a chart (metric, bar, line or none) for a result
 │   ├── usage.py             # Token usage, cache reads/writes and billed input tokens
@@ -543,6 +579,8 @@ AI-Data-Agent/
 │   ├── holdout2_questions.json # Second held-out set, written 2026-10-14
 │   ├── weather_questions.json  # Weather + rides questions, written before the agent saw the data (EXP-14)
 │   ├── unanswerable_questions.json # Questions the data can't answer + answerable controls (EXP-15)
+│   ├── nyc_questions.json   # Questions on 20.8M real NYC trips (EXP-16)
+│   ├── answer_keys/         # Saved reference results for slow sets (nyc.json)
 │   ├── followup_questions.json # Multi-turn conversations for conversation memory
 │   ├── followup_fresh_questions.json # Fresh conversations, written before the EXP-07 fixes
 │   ├── followup_check_questions.json # Final check conversations for EXP-07 part 2
