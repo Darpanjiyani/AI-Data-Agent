@@ -31,6 +31,8 @@ WRITE_REQUEST_MARKER = "WRITE_REQUEST"
 #   "-- NOT_IN_DATA: <what's missing>" then the SQL       the rest of the question is answered
 NOT_IN_DATA_MARKER = "NOT_IN_DATA"
 MISSING_LINE = re.compile(rf"^\s*(?:--\s*)?{NOT_IN_DATA_MARKER}\b\s*[:\-]?\s*(.*)$", re.IGNORECASE)
+# A query that reads only part of a table (EXP-17)
+SAMPLING = re.compile(r"\bTABLESAMPLE\b|\brandom\s*\(", re.IGNORECASE)
 QUERY_START = re.compile(r"^[\s(]*(SELECT|WITH)\b", re.IGNORECASE)
 
 
@@ -201,7 +203,9 @@ Rules:
      {NOT_IN_DATA_MARKER}: and one sentence saying what the database doesn't have, for example
      "{NOT_IN_DATA_MARKER}: The database doesn't record vehicle mileage."
    - If part of it can be answered, write the query for that part and put this line first:
-     -- {NOT_IN_DATA_MARKER}: <one sentence saying what the database doesn't have>"""
+     -- {NOT_IN_DATA_MARKER}: <one sentence saying what the database doesn't have>
+10. Compute exact results over every matching row. Don't read only part of a table
+    (TABLESAMPLE, random()) or approximate, unless the user asks for an estimate."""
 
 
 def sql_context() -> str:
@@ -331,8 +335,9 @@ def execute_sql(state: AgentSchema) -> AgentSchema:
 
     sql_query = state.generated_sql_query
 
-    # Always connect with the read-only database user (agent_reader)
-    obj = DatabaseUtil(reader_connection_details())
+    # Always connect with the read-only database user (agent_reader). A big dataset may allow a longer
+    # time limit than the user's 15 s default (EXP-17); the agent's SQL can't change it (set_config is blocked).
+    obj = DatabaseUtil(reader_connection_details(), statement_timeout=current_dataset()["query_timeout"])
 
     execution_result = obj.execute_query(sql_query)
     return {"sql_query_execution_result": execution_result}
@@ -357,6 +362,13 @@ def fix_sql(state: AgentSchema) -> AgentSchema:
     elif state.result_issue:
         problem = "Your previous query ran, but its result doesn't fit the question."
         error = state.result_issue
+    elif "statement timeout" in state.sql_query_execution_result:
+        # EXP-17: after a timeout the rewrite must stay exact, not switch to a sample
+        problem = ("Your previous query was stopped by the time limit. Write a faster query that returns "
+                   "exactly the same result over every matching row: don't read only part of the table "
+                   "(no TABLESAMPLE, no random()) and don't approximate. For example, aggregate the big "
+                   "table first and join small tables to the aggregated result.")
+        error = state.sql_query_execution_result
     else:
         problem = "Your previous query failed when it ran on the database."
         error = state.sql_query_execution_result
@@ -392,8 +404,13 @@ def represent_final_answer(state: AgentSchema) -> AgentSchema:
 
     # The query answers only part of the question: the rest isn't in the database (EXP-15)
     missing_part = ""
+    # EXP-17: if the query read only a sample, the result is an estimate and the answer must say so
+    if SAMPLING.search(state.generated_sql_query or ""):
+        missing_part += """
+    The query read only a random sample of the table (TABLESAMPLE or random()), so the result is an
+    estimate, not an exact figure. Say clearly that it's an estimate based on a sample.\n"""
     if state.missing_data:
-        missing_part = f"""
+        missing_part += f"""
     Part of the question can't be answered from the database: {state.missing_data}
     Start the answer by saying so in one sentence, then answer the rest from the result.
     Don't present any value in the result as the missing information.\n"""
